@@ -62,42 +62,53 @@ const upload = multer({
 
 /**
  * POST /api/chat
- * 发送消息给AI，获取清洗计划（支持图片识别）
+ * 获取数据上下文（浏览器端直接调用 Anthropic API，绕过服务器网络限制）
  */
 app.post('/api/chat', async (req, res) => {
   try {
-    const { message, image } = req.body; // image 是可选base64图片
+    const { message, image } = req.body;
     if (!message || !message.trim()) {
       return res.status(400).json({ error: '消息不能为空' });
     }
 
-    // 如果没有加载数据，进行简单对话
+    // 如果没有加载数据，返回引导信息
     if (!store.hasData()) {
-      const reply = await simpleChat(message, image || null);
-      return res.json(reply);
+      return res.json({
+        noData: true,
+        explanation: '请先上传Excel文件或连接数据库来加载数据，然后我才能帮你进行数据清洗。',
+        operations: []
+      });
     }
 
-    // 构建数据上下文
+    // 构建数据上下文（不含 AI 调用，由浏览器端处理）
     const preview = store.getPreview(5, 0);
     const schema = store.getSchema();
 
-    const dataContext = {
-      fields: preview.fields,
-      sampleRows: preview.rows,
-      totalRows: preview.totalRows,
-      fieldStats: schema
-    };
-
-    const plan = await getCleaningPlan(message, dataContext, image || null);
-    res.json(plan);
-  } catch (err) {
-    console.error('Chat error:', err);
-    res.status(500).json({
-      error: err.message,
-      explanation: err.message.includes('API') ? 'AI服务调用失败，请检查API Key配置' : '处理失败'
+    res.json({
+      dataContext: {
+        fields: preview.fields,
+        sampleRows: preview.rows,
+        totalRows: preview.totalRows,
+        fieldStats: schema
+      },
+      systemPrompt: buildCleaningSystemPrompt(preview, schema),
+      noData: false
     });
+  } catch (err) {
+    console.error('Chat context error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * 构建清洗系统提示词（替代 claude.js 中的 buildSystemPrompt）
+ */
+function buildCleaningSystemPrompt(preview, schema) {
+  return '你是一个专业的数据清洗助手。用户会用自然语言描述数据清洗需求，也可能上传图片让你识别其中的信息。\n\n## 当前数据集信息\n- 总行数：' + preview.totalRows + '\n- 字段列表及统计：\n' +
+    schema.map(f => '  · ' + f.name + ' (类型:' + f.type + ', 空值:' + f.nullCount + '个, 唯一值:' + f.uniqueCount + '个)').join('\n') +
+    '\n\n- 数据样本（前5行）：\n' + JSON.stringify(preview.rows.slice(0, 5), null, 2) +
+    '\n\n## 支持的清洗操作\n### 删除与筛选\n| delete_rows | 删除符合条件的行 | 条件: contains, equals, not_equals, starts_with, ends_with, is_empty, regex, greater_than, less_than |\n| filter_rows | 只保留符合条件的行 |\n\n### 修改\n| replace_value | 替换字段中部分文本 |\n| set_value | 将符合条件的字段设为新值 |\n| update_row | 同时更新多个字段（用updates对象 + conditionField指定匹配字段）|\n\n### 新增与结构\n| add_row | 新增一行（用rowData对象）|\n| drop_column | 删除整列 |\n| fill_empty | 填充空值 |\n| trim | 去除首尾空格 |\n| rename_column | 重命名列（newName）|\n\n## 返回格式（严格JSON）\n{"explanation":"操作说明","confidence":"high|medium|low","askConfirm":true,"operations":[{"type":"操作类型","field":"字段名","condition":"条件","value":"匹配值","newValue":"新值","updates":{},"rowData":{},"newName":"新字段名"}]}\n\n## 规则\n1. field 必须与数据集字段名完全一致\n2. 如果上传了图片，识别图片中标记/圈注的内容\n3. 不确定时设置 askConfirm: true\n4. 仅返回JSON，不要包含```json```标记';
+}
 
 /**
  * POST /api/execute

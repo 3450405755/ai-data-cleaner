@@ -834,6 +834,7 @@ a { color: var(--primary); text-decoration: none; }
         <button class="btn btn-sm btn-outline" onclick="downloadData()" title="下载清洗后的数据">⬇ 下载</button>
         <button class="btn btn-sm btn-outline" onclick="syncToDatabase()" id="sync-db-btn" title="将清洗操作同步回原始数据库" style="display:none;">💾 同步到数据库</button>
         <button class="btn btn-sm btn-outline" onclick="refreshData()" title="刷新数据状态，保留对话记录">🔄 刷新</button>
+        <button class="btn btn-sm btn-outline" onclick="showApiKeyDialog()" title="设置 API Key">🔑 Key</button>
         <button class="btn btn-sm btn-outline" onclick="toggleTheme()" title="切换主题">🌓</button>
       </div>
     </div>
@@ -913,6 +914,12 @@ let mysqlConfig = null;  // MySQL连接配置（含密码用于API调用）
 let currentSourceInfo = null; // 当前数据源信息（用于UI状态恢复）
 let attachedImage = null; // 当前附加的图片 { dataUrl, fileName }
 
+// AI API Key（存入 localStorage 跨页面保留）
+let aiApiKey = localStorage.getItem('ai_api_key') || 'sk-5cc2904586c0449b9b58af46505d8a24';
+if (!localStorage.getItem('ai_api_key')) {
+  localStorage.setItem('ai_api_key', aiApiKey);
+}
+
 // ==================== 工具函数 ====================
 const $ = (sel, parent = document) => parent.querySelector(sel);
 const $$ = (sel, parent = document) => parent.querySelectorAll(sel);
@@ -951,6 +958,16 @@ function toggleTheme() {
   const body = document.body;
   const next = body.dataset.theme === 'dark' ? 'light' : 'dark';
   body.dataset.theme = next;
+}
+
+// ==================== API Key 设置 ====================
+function showApiKeyDialog() {
+  const key = prompt('输入 Anthropic API Key（浏览器端调用，走本地代理）：', aiApiKey);
+  if (key && key.trim()) {
+    aiApiKey = key.trim();
+    localStorage.setItem('ai_api_key', aiApiKey);
+    showToast('✅ API Key 已保存', 'success');
+  }
 }
 
 // ==================== 数据预览面板 ====================
@@ -1421,43 +1438,89 @@ async function sendMessage() {
   const message = msgInput.value.trim();
   if (!message || isLoading) return;
 
-  const imageData = attachedImage; // 保存当前图片引用
+  const imageData = attachedImage;
   msgInput.value = '';
   msgInput.style.height = 'auto';
-  removeImage(); // 清除图片预览
+  removeImage();
 
-  // 添加用户消息（含图片）
   addUserMessage(message, imageData);
   removeWelcome();
   isLoading = true;
   $('#send-btn').disabled = true;
 
-  // 显示加载动画
   const loadingMsg = addLoadingMessage();
 
   try {
-    const requestBody = { message };
-    if (imageData) {
-      requestBody.image = imageData.dataUrl; // base64 data URL
-    }
-    const result = await api('/api/chat', {
+    // Step 1: 从服务器获取数据上下文
+    const requestBody = { message, image: imageData ? imageData.dataUrl : null };
+    const ctxResult = await api('/api/chat', {
       method: 'POST',
       body: JSON.stringify(requestBody)
     });
 
-    // 移除加载动画
+    if (ctxResult.noData) {
+      loadingMsg.remove();
+      addAssistantMessage(ctxResult.explanation, null);
+      isLoading = false;
+      $('#send-btn').disabled = false;
+      msgInput.focus();
+      return;
+    }
+
+    // Step 2: 浏览器直接调用 Anthropic API（走用户本地代理）
+    const aiMessages = [{ role: 'user', content: message }];
+    if (imageData) {
+      const { mediaType, base64 } = parseDataUrlForAI(imageData.dataUrl);
+      aiMessages[0].content = [
+        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+        { type: 'text', text: message || '请分析图片内容' }
+      ];
+    }
+
+    const aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': aiApiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        system: ctxResult.systemPrompt,
+        messages: aiMessages
+      })
+    });
+
+    if (!aiResponse.ok) {
+      const errData = await aiResponse.json().catch(() => ({}));
+      throw new Error('AI API 错误: ' + (errData.error?.message || aiResponse.status));
+    }
+
+    const aiData = await aiResponse.json();
+    const aiText = aiData.content
+      .filter(b => b.type === 'text')
+      .map(b => b.text).join('').trim();
+
+    // 解析JSON
+    let jsonStr = aiText;
+    const m = aiText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (m) jsonStr = m[1].trim();
+
+    let plan;
+    try {
+      plan = JSON.parse(jsonStr);
+    } catch {
+      throw new Error('AI返回格式解析失败: ' + aiText.substring(0, 200));
+    }
+
     loadingMsg.remove();
 
-    if (result.noData) {
-      // 无数据时的简单回复
-      addAssistantMessage(result.explanation, null);
-    } else if (result.operations && result.operations.length > 0) {
-      // 有清洗计划
-      addAssistantMessage(result.explanation, result);
-      currentPlan = result;
+    if (plan.operations && plan.operations.length > 0) {
+      addAssistantMessage(plan.explanation, plan);
+      currentPlan = plan;
     } else {
-      // AI未返回操作（可能没理解或不需要清洗）
-      addAssistantMessage(result.explanation || '我理解了你的需求，但当前没有需要执行的清洗操作。', null);
+      addAssistantMessage(plan.explanation || 'AI未返回操作', null);
     }
   } catch (err) {
     loadingMsg.remove();
@@ -1467,6 +1530,13 @@ async function sendMessage() {
     $('#send-btn').disabled = false;
     msgInput.focus();
   }
+}
+
+// 解析 data URL 为 mediaType 和 base64
+function parseDataUrlForAI(dataUrl) {
+  const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
+  if (match) return { mediaType: match[1], base64: match[2] };
+  return { mediaType: 'image/png', base64: dataUrl };
 }
 
 function addUserMessage(text, imageData) {
