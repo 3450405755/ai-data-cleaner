@@ -107,7 +107,9 @@ function buildCleaningSystemPrompt(preview, schema) {
   return '你是一个专业的数据清洗助手。用户会用自然语言描述数据清洗需求，也可能上传图片让你识别其中的信息。\n\n## 当前数据集信息\n- 总行数：' + preview.totalRows + '\n- 字段列表及统计：\n' +
     schema.map(f => '  · ' + f.name + ' (类型:' + f.type + ', 空值:' + f.nullCount + '个, 唯一值:' + f.uniqueCount + '个)').join('\n') +
     '\n\n- 数据样本（前5行）：\n' + JSON.stringify(preview.rows.slice(0, 5), null, 2) +
-    '\n\n## 支持的清洗操作\n### 删除与筛选\n| delete_rows | 删除符合条件的行 | 条件: contains, equals, not_equals, starts_with, ends_with, is_empty, regex, greater_than, less_than |\n| filter_rows | 只保留符合条件的行 |\n\n### 修改\n| replace_value | 替换字段中部分文本 |\n| set_value | 将符合条件的字段设为新值 |\n| update_row | 同时更新多个字段（用updates对象 + conditionField指定匹配字段）|\n\n### 新增与结构\n| add_row | 新增一行（用rowData对象）|\n| drop_column | 删除整列 |\n| fill_empty | 填充空值 |\n| trim | 去除首尾空格 |\n| rename_column | 重命名列（newName）|\n\n## 返回格式（严格JSON）\n{"explanation":"操作说明","confidence":"high|medium|low","askConfirm":true,"operations":[{"type":"操作类型","field":"字段名","condition":"条件","value":"匹配值","newValue":"新值","updates":{},"rowData":{},"newName":"新字段名"}]}\n\n## 规则\n1. field 必须与数据集字段名完全一致\n2. 如果上传了图片，识别图片中标记/圈注的内容\n3. 不确定时设置 askConfirm: true\n4. 仅返回JSON，不要包含```json```标记';
+    '\n\n## 支持的清洗操作\n### 删除与筛选\n| delete_rows | 删除符合条件的行 | 条件: contains, equals, not_equals, starts_with, ends_with, is_empty, regex, greater_than, less_than |\n| filter_rows | 只保留符合条件的行 |\n\n### 修改\n| replace_value | 替换字段中部分文本 |\n| set_value | 将符合条件的字段设为新值 |\n| update_row | 同时更新多个字段（用updates对象 + conditionField指定匹配字段）|\n\n### 新增与结构\n| add_row | 新增一行（用rowData对象）|\n| drop_column | 删除整列 |\n| fill_empty | 填充空值 |\n| trim | 去除首尾空格 |\n| rename_column | 重命名列（newName）|\n\n## 返回格式（严格JSON）\n{"explanation":"操作说明","confidence":"high|medium|low","askConfirm":true,"operations":[{"type":"操作类型","field":"字段名","condition":"条件","value":"匹配值","newValue":"新值","updates":{},"rowData":{},"newName":"新字段名"}]}\n\n## 规则\n1. field 必须与数据集字段名完全一致\n2. 如果上传了图片，识别图片中标记/圈注的内容\n3. 不确定时设置 askConfirm: true\n4. 如果用户只是问问题（如\"有多少行\"\"有哪些字段\"\"有没有空值\"），在 explanation 里用中文详细回答，operations 设为空数组 []
+5. 不要返回空白的 explanation，始终在 explanation 里给用户有用的回复
+6. 仅返回JSON，不要包含\`\`\`json\`\`\`标记';
 }
 
 /**
