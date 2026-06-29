@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: ai-data-cleaner
+    env: node
+    buildCommand: npm install
+    startCommand: node server.js
+    plan: free
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: PORT
+        value: "3000"
