@@ -915,7 +915,7 @@ let currentSourceInfo = null; // 当前数据源信息（用于UI状态恢复）
 let attachedImage = null; // 当前附加的图片 { dataUrl, fileName }
 
 // AI API Key（存入 localStorage 跨页面保留）
-let aiApiKey = localStorage.getItem('ai_api_key') || 'sk-5cc2904586c0449b9b58af46505d8a24';
+let aiApiKey = localStorage.getItem('ai_api_key') || 'sk-018dd51a952349bc942668a2977baf66';
 if (!localStorage.getItem('ai_api_key')) {
   localStorage.setItem('ai_api_key', aiApiKey);
 }
@@ -1467,27 +1467,26 @@ async function sendMessage() {
       return;
     }
 
-    // Step 2: 浏览器直接调用 Anthropic API（走用户本地代理）
-    const aiMessages = [{ role: 'user', content: message }];
+    // Step 2: 浏览器直接调用 DeepSeek API（走用户本地代理）
+    const aiMessages = [
+      { role: 'system', content: ctxResult.systemPrompt },
+      { role: 'user', content: message }
+    ];
+
+    // 图片识别：转为base64 data URL嵌入文本
     if (imageData) {
-      const { mediaType, base64 } = parseDataUrlForAI(imageData.dataUrl);
-      aiMessages[0].content = [
-        { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
-        { type: 'text', text: message || '请分析图片内容' }
-      ];
+      aiMessages[1].content = message + '\n\n[图片base64: ' + imageData.dataUrl + ']';
     }
 
-    const aiResponse = await fetch('https://api.anthropic.com/v1/messages', {
+    const aiResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': aiApiKey,
-        'anthropic-version': '2023-06-01'
+        'Authorization': 'Bearer ' + aiApiKey
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'deepseek-chat',
         max_tokens: 4096,
-        system: ctxResult.systemPrompt,
         messages: aiMessages
       })
     });
@@ -1498,9 +1497,7 @@ async function sendMessage() {
     }
 
     const aiData = await aiResponse.json();
-    const aiText = aiData.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text).join('').trim();
+    const aiText = aiData.choices?.[0]?.message?.content || '';
 
     // 解析JSON
     let jsonStr = aiText;
