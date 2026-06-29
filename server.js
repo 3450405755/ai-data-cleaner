@@ -13,10 +13,9 @@ const fs = require('fs');
 const store = require('./src/data/store');
 const { readExcelFile, writeExcelBuffer } = require('./src/data/excel');
 const { testConnection, getTables, getTableData } = require('./src/data/mysql');
-const { readSQLiteFile } = require('./src/data/sqlite');
 const { getCleaningPlan, simpleChat } = require('./src/ai/claude');
 const { executeCleaning } = require('./src/cleaner/executor');
-const { syncToMySQL, syncToSQLite } = require('./src/data/sync');
+const { syncToMySQL } = require('./src/data/sync');
 
 // 追踪最后执行的操作（用于同步到数据库）
 let lastOperations = [];
@@ -48,7 +47,7 @@ const upload = multer({
   storage,
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const allowed = ['.xlsx', '.xls', '.csv', '.db', '.sqlite', '.sqlite3'];
+    const allowed = ['.xlsx', '.xls', '.csv'];
     if (allowed.includes(ext)) {
       cb(null, true);
     } else {
@@ -168,7 +167,7 @@ app.post('/api/execute', (req, res) => {
 
     const result = executeCleaning(operations);
     if (result.success) {
-      result._canSync = (store.sourceInfo?.type === 'mysql' || store.sourceInfo?.type === 'sqlite');
+      result._canSync = (store.sourceInfo?.type === 'mysql');
       result._syncInfo = syncPreviewInfo;
     }
     res.json(result);
@@ -333,84 +332,6 @@ app.post('/api/load-mysql-table', async (req, res) => {
   } catch (err) {
     console.error('MySQL load table error:', err);
     res.status(500).json({ error: `加载表数据失败: ${err.message}` });
-  }
-});
-
-/**
- * POST /api/connect-sqlite
- * 上传并读取SQLite数据库文件
- */
-app.post('/api/connect-sqlite', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ error: '请选择SQLite数据库文件' });
-    }
-
-    const result = await readSQLiteFile(req.file.path);
-
-    if (result.tables.length === 0) {
-      return res.status(400).json({ error: '数据库中未找到用户表' });
-    }
-
-    const tables = result.tables.map(t => ({
-      name: t.name,
-      fields: t.fields,
-      rowCount: t.rows.length
-    }));
-
-    // 默认加载第一个表
-    const firstTable = result.tables[0];
-    store.load(firstTable.rows, firstTable.fields, {
-      type: 'sqlite',
-      name: req.file.originalname,
-      table: firstTable.name,
-      filePath: req.file.path,
-      allTables: result.tables
-    });
-
-    res.json({
-      success: true,
-      fileName: req.file.originalname,
-      tables,
-      activeTable: firstTable.name,
-      data: store.getPreview()
-    });
-  } catch (err) {
-    console.error('SQLite error:', err);
-    res.status(500).json({ error: `SQLite读取失败: ${err.message}` });
-  }
-});
-
-/**
- * POST /api/switch-table
- * 切换SQLite中的表
- */
-app.post('/api/switch-table', (req, res) => {
-  try {
-    const { tableName } = req.body;
-    const sourceInfo = store.sourceInfo;
-
-    if (!sourceInfo || sourceInfo.type !== 'sqlite' || !sourceInfo.allTables) {
-      return res.status(400).json({ error: '当前数据源不支持切换表' });
-    }
-
-    const targetTable = sourceInfo.allTables.find(t => t.name === tableName);
-    if (!targetTable) {
-      return res.status(404).json({ error: `表 "${tableName}" 不存在` });
-    }
-
-    store.load(targetTable.rows, targetTable.fields, {
-      ...sourceInfo,
-      table: tableName
-    });
-
-    res.json({
-      success: true,
-      activeTable: tableName,
-      data: store.getPreview()
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 
@@ -582,9 +503,6 @@ app.post('/api/sync-to-db', async (req, res) => {
         });
       }
       result = await syncToMySQL(sourceInfo, lastOperations);
-    } else if (sourceInfo.type === 'sqlite') {
-      const data = store.exportData();
-      result = await syncToSQLite(sourceInfo, data.rows, data.fields);
     } else {
       return res.status(400).json({
         error: `当前数据源类型"${sourceInfo.type}"不支持直接同步，请使用下载功能导出文件`
@@ -629,7 +547,7 @@ app.get('/api/sync-preview', (req, res) => {
       updates: op.updates,
       rowData: op.rowData
     })),
-    canSync: sourceInfo?.type === 'mysql' || sourceInfo?.type === 'sqlite',
+    canSync: sourceInfo?.type === 'mysql',
     message: `有 ${lastOperations.length} 个操作待同步到 ${sourceInfo?.type} 数据库`
   });
 });

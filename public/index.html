@@ -737,7 +737,6 @@ a { color: var(--primary); text-decoration: none; }
     <div class="source-tabs">
       <button class="source-tab active" data-tab="excel">📄 上传Excel</button>
       <button class="source-tab" data-tab="mysql">🐬 连接MySQL</button>
-      <button class="source-tab" data-tab="sqlite">📦 打开SQLite</button>
     </div>
 
     <!-- Excel面板 -->
@@ -796,26 +795,6 @@ a { color: var(--primary); text-decoration: none; }
       </div>
     </div>
 
-    <!-- SQLite面板 -->
-    <div class="source-panel" id="panel-sqlite">
-      <h3>上传SQLite数据库</h3>
-      <div class="upload-zone" id="sqlite-upload-zone">
-        <div class="upload-icon">🗄️</div>
-        <div class="upload-text">点击上传SQLite数据库文件</div>
-        <div class="upload-hint">支持 .db, .sqlite, .sqlite3 (最大50MB)</div>
-      </div>
-      <input type="file" id="sqlite-file-input" accept=".db,.sqlite,.sqlite3" hidden>
-      <div class="sheet-selector" id="sqlite-tables">
-        <div class="form-group">
-          <label>选择表</label>
-          <select id="sqlite-table-select"></select>
-        </div>
-      </div>
-      <div class="source-status" id="sqlite-status">
-        <div class="status-title">✅ 已加载</div>
-        <div class="status-info" id="sqlite-status-info"></div>
-      </div>
-    </div>
   </aside>
 
   <!-- ========== 主区域 ========== -->
@@ -1037,7 +1016,7 @@ function updateSourceStatus(sourceInfo) {
   const type = sourceInfo.type;
 
   // 隐藏所有状态面板和选择器
-  ['excel','mysql','sqlite'].forEach(t => {
+  ['excel','mysql'].forEach(t => {
     const st = $('#panel-'+t+' .source-status');
     if (st) st.classList.remove('visible');
   });
@@ -1080,23 +1059,6 @@ function updateSourceStatus(sourceInfo) {
     // 自动切换到MySQL标签
     switchToSourceTab('mysql');
 
-  } else if (type === 'sqlite') {
-    const status = $('#sqlite-status');
-    status.classList.add('visible');
-    $('#sqlite-status-info').innerHTML = `文件: ${escHtml(sourceInfo.name)}<br>表: ${escHtml(sourceInfo.table)}`;
-
-    const allTables = sourceInfo.allTables || [];
-    // 始终显示表选择器
-    if (allTables.length >= 1) {
-      const sel = $('#sqlite-table-select');
-      sel.innerHTML = allTables.map(t =>
-        `<option value="${escHtml(t.name)}" ${t.name===sourceInfo.table?'selected':''}>${escHtml(t.name)} (${t.rows.length}行)</option>`
-      ).join('');
-      $('#sqlite-tables').classList.add('visible');
-    }
-
-    // 自动切换到SQLite标签
-    switchToSourceTab('sqlite');
   }
 }
 
@@ -1240,57 +1202,6 @@ async function loadMySQLTable() {
     btn.disabled = false;
   }
 }
-
-// ==================== SQLite上传 ====================
-const sqliteZone = $('#sqlite-upload-zone');
-const sqliteInput = $('#sqlite-file-input');
-
-sqliteZone.addEventListener('click', () => sqliteInput.click());
-sqliteZone.addEventListener('dragover', e => { e.preventDefault(); sqliteZone.classList.add('drag-over'); });
-sqliteZone.addEventListener('dragleave', () => sqliteZone.classList.remove('drag-over'));
-sqliteZone.addEventListener('drop', e => {
-  e.preventDefault();
-  sqliteZone.classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) uploadSQLiteFile(file);
-});
-sqliteInput.addEventListener('change', () => {
-  if (sqliteInput.files[0]) uploadSQLiteFile(sqliteInput.files[0]);
-});
-
-async function uploadSQLiteFile(file) {
-  const btn = $('#sqlite-upload-zone');
-  btn.style.opacity = '0.6';
-  showToast('正在读取SQLite数据库...', 'info');
-  try {
-    const result = await uploadFile('/api/connect-sqlite', file);
-    currentSourceInfo = result.data.sourceInfo;
-    updatePreview(result.data);
-    updateSourceStatus(result.data.sourceInfo);
-    showToast(`✅ 成功加载: ${result.fileName}，${result.tables.length}个表，当前表 ${result.activeTable} (${result.data.totalRows}行)`, 'success');
-    addSystemMessage(`📦 已加载 **${escHtml(result.fileName)}**，共 ${result.tables.length} 个表，当前表 **${escHtml(result.activeTable)}** (${result.data.totalRows}行)`);
-  } catch (err) {
-    showToast('❌ ' + err.message, 'error');
-    console.error('SQLite upload error:', err);
-  } finally {
-    btn.style.opacity = '1';
-  }
-}
-
-// SQLite表切换
-$('#sqlite-table-select').addEventListener('change', async function() {
-  try {
-    const result = await api('/api/switch-table', {
-      method: 'POST',
-      body: JSON.stringify({ tableName: this.value })
-    });
-    updatePreview(result.data);
-    updateSourceStatus(result.data.sourceInfo);
-    showToast(`已切换到表: ${this.value}`, 'success');
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-});
 
 // ==================== 聊天功能 ====================
 const chatArea = $('#chat-area');
