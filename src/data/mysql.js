@@ -60,7 +60,7 @@ async function getTables(config) {
  * @param {Object} config - 连接配置
  * @param {string} tableName - 表名
  * @param {number} limit - 返回行数限制
- * @returns {Promise<{fields: string[], rows: Array<Object>}>}
+ * @returns {Promise<{fields: string[], rows: Array<Object>, totalRows: number}>}
  */
 async function getTableData(config, tableName, limit = 5000) {
   let conn;
@@ -68,7 +68,7 @@ async function getTableData(config, tableName, limit = 5000) {
     console.log(`[MySQL] 连接数据库 ${config.database}，准备读取表 ${tableName}...`);
     conn = await createConnection(config);
 
-    // 获取列信息 - 使用 query 避免 prepared statement 问题
+    // 获取列信息
     const [columns] = await conn.query(
       'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION',
       [config.database, tableName]
@@ -81,13 +81,17 @@ async function getTableData(config, tableName, limit = 5000) {
     const fields = columns.map(c => c.COLUMN_NAME);
     console.log(`[MySQL] 表 ${tableName} 有 ${fields.length} 列: ${fields.join(', ')}`);
 
-    // 获取数据 - 使用 query 并将 limit 直接拼入SQL（已验证安全）
+    // 获取真实总行数
     const safeTable = '`' + tableName.replace(/`/g, '``') + '`';
+    const [countResult] = await conn.query(`SELECT COUNT(*) as cnt FROM ${safeTable}`);
+    const realTotalRows = countResult[0].cnt;
+
+    // 获取数据
     const [rows] = await conn.query(
       `SELECT * FROM ${safeTable} LIMIT ${parseInt(limit)}`
     );
 
-    console.log(`[MySQL] 读取到 ${rows.length} 行数据`);
+    console.log(`[MySQL] 表真实行数: ${realTotalRows}, 已读取: ${rows.length} 行`);
 
     // 将RowDataPacket转为普通对象，处理特殊类型
     const cleanRows = rows.map(row => {
@@ -111,7 +115,7 @@ async function getTableData(config, tableName, limit = 5000) {
       return obj;
     });
 
-    return { fields, rows: cleanRows };
+    return { fields, rows: cleanRows, totalRows: realTotalRows };
   } catch (err) {
     console.error(`[MySQL] 读取表 ${tableName} 失败:`, err.message);
     throw new Error(`读取表数据失败: ${err.message}`);

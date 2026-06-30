@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "stop": "node -e \"try{process.kill(require('fs').readFileSync('.server.pid','utf8').trim())}catch(e){console.log('未找到运行中的服务')}\"",
     "dev": "node server.js"
   },
   "dependencies": {

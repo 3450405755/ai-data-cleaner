@@ -17,10 +17,10 @@ class DataStore {
   /**
    * 加载新数据集
    */
-  load(rows, fields, sourceInfo = null) {
+  load(rows, fields, sourceInfo = null, totalRowsOverride = null) {
     this.data = rows;
     this.fields = fields;
-    this.totalRows = rows.length;
+    this.totalRows = totalRowsOverride || rows.length;
     this.sourceInfo = sourceInfo;
     this.history = [];
     this.recycleBin = [];

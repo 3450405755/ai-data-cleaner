@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI数据清洗工具</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts-wordcloud@2.1.0/dist/echarts-wordcloud.min.js"></script>
 <style>
 /* ============ CSS变量 & 主题 ============ */
 :root {
@@ -28,7 +31,7 @@
   --radius: 10px;
   --radius-sm: 6px;
   --sidebar-w: 300px;
-  --preview-h: 260px;
+  --preview-h: 400px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", Consolas, monospace;
 }
@@ -280,6 +283,20 @@ a { color: var(--primary); text-decoration: none; }
   justify-content: space-between;
 }
 
+.module-tab {
+  padding: 6px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--text2);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: all .15s;
+}
+.module-tab:hover { border-color: var(--primary); color: var(--primary); }
+.module-tab.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
 #topbar .data-indicator {
   font-size: 12px;
   color: var(--text2);
@@ -527,7 +544,7 @@ a { color: var(--primary); text-decoration: none; }
 }
 
 #preview-panel.collapsed { max-height: 40px; }
-#preview-panel:not(.collapsed) { max-height: var(--preview-h); }
+#preview-panel:not(.collapsed) { max-height: var(--preview-h); display: flex; flex-direction: column; }
 
 #preview-toggle {
   width: 100%;
@@ -541,25 +558,29 @@ a { color: var(--primary); text-decoration: none; }
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 #preview-toggle:hover { background: var(--surface2); }
 
+#preview-search-bar { flex-shrink: 0; }
+
 #preview-content {
-  height: calc(var(--preview-h) - 40px);
+  flex: 1;
   overflow: auto;
+  min-height: 0;
 }
 
 #preview-table {
-  width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  min-width: max-content;
 }
 
 #preview-table thead {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
 }
 
 #preview-table th {
@@ -570,15 +591,14 @@ a { color: var(--primary); text-decoration: none; }
   color: var(--text2);
   border-bottom: 2px solid var(--border);
   white-space: nowrap;
+  position: sticky;
+  top: 0;
 }
 
 #preview-table td {
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 #preview-table tr:hover td { background: var(--surface2); }
@@ -710,6 +730,19 @@ a { color: var(--primary); text-decoration: none; }
 }
 .recycle-empty .icon { font-size: 40px; margin-bottom: 12px; }
 
+/* BI 指标卡 */
+.metric-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+  min-width: 100px;
+  flex: 1;
+  text-align: center;
+}
+.metric-val { font-size: 22px; font-weight: 700; color: var(--primary); }
+.metric-label { font-size: 11px; color: var(--text3); margin-top: 2px; }
+
 .badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; border-radius: 10px;
@@ -800,6 +833,10 @@ a { color: var(--primary); text-decoration: none; }
   <!-- ========== 主区域 ========== -->
   <div id="main">
     <div id="topbar">
+      <div style="display:flex;align-items:center;gap:12px;">
+        <button class="module-tab active" data-module="clean" onclick="switchModule('clean')">🧹 数据清洗</button>
+        <button class="module-tab" data-module="analyze" onclick="switchModule('analyze')">📊 数据分析</button>
+      </div>
       <div class="data-indicator">
         <span class="dot" id="data-dot"></span>
         <span id="data-label">未加载数据</span>
@@ -813,8 +850,24 @@ a { color: var(--primary); text-decoration: none; }
         <button class="btn btn-sm btn-outline" onclick="downloadData()" title="下载清洗后的数据">⬇ 下载</button>
         <button class="btn btn-sm btn-outline" onclick="syncToDatabase()" id="sync-db-btn" title="将清洗操作同步回原始数据库" style="display:none;">💾 同步到数据库</button>
         <button class="btn btn-sm btn-outline" onclick="refreshData()" title="刷新数据状态，保留对话记录">🔄 刷新</button>
-        <button class="btn btn-sm btn-outline" onclick="showApiKeyDialog()" title="设置 API Key">🔑 Key</button>
-        <button class="btn btn-sm btn-outline" onclick="toggleTheme()" title="切换主题">🌓</button>
+        <button class="btn btn-sm btn-outline" onclick="openSettings()" title="设置">⚙️</button>
+      </div>
+    </div>
+
+    <!-- 数据仪表盘 -->
+    <div id="dashboard" style="display:none;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);">
+      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:12px;">
+        <span style="font-weight:700;color:var(--text);">📊 数据概况</span>
+        <span id="dash-rows">📋 行: -</span>
+        <span id="dash-cols">📌 列: -</span>
+        <span id="dash-nulls">🕳️ 空值率: -</span>
+        <span id="dash-dups">🔄 重复率: -</span>
+        <span id="dash-source" style="color:var(--text3);">来源: -</span>
+        <div style="flex:1;"></div>
+        <button class="btn btn-sm btn-outline" onclick="smartDiagnose()" id="diagnose-btn" title="AI自动扫描数据发现问题">🔍 智能诊断</button>
+        <button class="btn btn-sm btn-outline" onclick="saveTemplate()" title="保存当前清洗规则为模板">💾 存模板</button>
+        <button class="btn btn-sm btn-outline" onclick="loadTemplate()" title="加载已保存的清洗规则">📂 载模板</button>
+        <button class="btn btn-sm btn-outline" onclick="downloadReport()" title="下载清洗报告含前后对比">📋 导出报告</button>
       </div>
     </div>
 
@@ -832,6 +885,25 @@ a { color: var(--primary); text-decoration: none; }
       </div>
     </div>
 
+    <!-- 数据分析面板 -->
+    <div id="analyze-panel" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
+      <div id="analyze-chat" style="flex:1;overflow-y:auto;padding:0;">
+        <div class="welcome" style="padding:60px 20px;">
+          <div class="welcome-icon">📊</div>
+          <h2>数据分析看板</h2>
+          <p>加载数据后，AI 会根据你的问题生成 BI 报表。<br>点击上方快捷按钮或输入分析问题。</p>
+        </div>
+        <!-- BI报表区 -->
+        <div id="bi-report" style="display:none;padding:16px 20px;"></div>
+      </div>
+      <div style="padding:12px 20px;background:var(--surface);border-top:1px solid var(--border);">
+        <div style="display:flex;gap:8px;">
+          <textarea id="analyze-input" rows="1" placeholder="例如：按城市统计公司数量、分析各行业占比..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAnalyze()}" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:20px;font-size:13px;resize:none;background:var(--surface2);color:var(--text);font-family:var(--font);"></textarea>
+          <button onclick="sendAnalyze()" style="width:38px;height:38px;border-radius:50%;border:none;background:var(--primary);color:#fff;font-size:16px;cursor:pointer;">➤</button>
+        </div>
+      </div>
+    </div>
+
     <div id="input-area">
       <!-- 图片预览条 -->
       <div id="image-preview-bar" style="display:none; margin-bottom: 8px; padding: 8px 12px; background: var(--surface2); border-radius: var(--radius-sm); display: flex; align-items: center; gap: 8px;">
@@ -840,7 +912,7 @@ a { color: var(--primary); text-decoration: none; }
         <button onclick="removeImage()" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--text3);">✕</button>
       </div>
       <div id="input-row">
-        <button id="img-upload-btn" onclick="document.getElementById('image-file-input').click()" title="上传图片让AI识别" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--surface2);cursor:pointer;font-size:16px;flex-shrink:0;">🖼️</button>
+        <button id="img-upload-btn" onclick="document.getElementById('image-file-input').click()" title="上传图片让AI识别" style="width:36px;height:36px;border-radius:50%;border:1px solid var(--border);background:var(--surface2);cursor:pointer;font-size:16px;flex-shrink:0;">＋</button>
         <input type="file" id="image-file-input" accept="image/*" onchange="handleImageSelect(event)" hidden>
         <textarea id="message-input" rows="1" placeholder="描述你的数据清洗需求，也可以上传图片让AI识别..." onkeydown="handleKeyDown(event)" onpaste="handlePaste(event)"></textarea>
         <button id="send-btn" onclick="sendMessage()" title="发送">➤</button>
@@ -854,12 +926,80 @@ a { color: var(--primary); text-decoration: none; }
         📊 数据预览
         <span id="preview-arrow">▲</span>
       </button>
+      <div style="padding:6px 12px;display:flex;gap:8px;align-items:center;background:var(--surface2);" id="preview-search-bar">
+        <input type="text" id="preview-search" placeholder="🔍 搜索筛选..." oninput="applyPreviewFilter()" style="flex:1;padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);">
+        <select id="preview-field-filter" onchange="applyPreviewFilter()" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);"><option value="">所有字段</option></select>
+        <select id="preview-limit" style="padding:4px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);">
+          <option value="100">100条</option>
+          <option value="500">500条</option>
+          <option value="1000">1000条</option>
+          <option value="3000">3000条</option>
+          <option value="5000">5000条</option>
+          <option value="0">全部</option>
+        </select>
+        <button class="btn btn-sm btn-outline" onclick="reloadPreviewData()" style="padding:2px 10px;font-size:11px;">加载</button>
+        <span id="preview-filter-count" style="font-size:11px;color:var(--text3);white-space:nowrap;"></span>
+      </div>
       <div id="preview-content">
         <div class="preview-empty" id="preview-empty">暂无数据，请先上传文件或连接数据库</div>
         <table id="preview-table" style="display:none">
           <thead id="preview-head"></thead>
           <tbody id="preview-body"></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- 设置面板 -->
+  <div class="modal-overlay" id="settings-modal" style="display:none;">
+    <div class="modal" style="max-width:750px;max-height:85vh;">
+      <div class="modal-header">
+        <h2>⚙️ 设置</h2>
+        <button class="modal-close" onclick="closeSettings()">✕</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:16px;">
+        <!-- 常规设置 -->
+        <div>
+          <label style="font-size:13px;font-weight:600;color:var(--text2);display:block;margin-bottom:8px;">API Key</label>
+          <div style="display:flex;gap:8px;">
+            <div style="display:flex;gap:4px;flex:1;">
+              <input type="password" id="settings-apikey" placeholder="输入 DeepSeek API Key" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;background:var(--surface2);color:var(--text);">
+              <button id="key-eye-btn" onclick="toggleKeyVisibility()" title="显示/隐藏Key" style="width:36px;height:36px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;">
+                <svg id="eye-open" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                <svg id="eye-closed" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveApiKey()">保存</button>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;font-weight:600;color:var(--text2);">主题切换</span>
+          <button class="btn btn-sm btn-outline" onclick="toggleTheme()">🌓 切换主题</button>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--border);">
+        <!-- 操作日志 -->
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span style="font-size:13px;font-weight:600;color:var(--text2);">📋 操作日志</span>
+            <button class="btn btn-sm btn-outline" onclick="clearLogs()">清空</button>
+          </div>
+          <div id="log-container" style="max-height:300px;overflow-y:auto;background:var(--surface2);border-radius:6px;padding:8px;font-family:var(--mono);font-size:11px;line-height:1.8;color:var(--text2);">
+            <div style="color:var(--text3);text-align:center;padding:12px;">暂无操作记录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 模板管理弹窗 -->
+  <div class="modal-overlay" id="template-modal" style="display:none;">
+    <div class="modal" style="max-width:600px;">
+      <div class="modal-header">
+        <h2>📂 清洗模板</h2>
+        <button class="modal-close" onclick="closeTemplateModal()">✕</button>
+      </div>
+      <div class="modal-body" id="template-list" style="max-height:300px;overflow-y:auto;">
+        <div style="color:var(--text3);text-align:center;padding:20px;">暂无保存的模板</div>
       </div>
     </div>
   </div>
@@ -939,15 +1079,88 @@ function toggleTheme() {
   body.dataset.theme = next;
 }
 
-// ==================== API Key 设置 ====================
-function showApiKeyDialog() {
-  const key = prompt('输入 Anthropic API Key（浏览器端调用，走本地代理）：', aiApiKey);
-  if (key && key.trim()) {
-    aiApiKey = key.trim();
+// ==================== 日志系统 ====================
+let operationLogs = [];
+
+function logEvent(type, message, details) {
+  const now = new Date();
+  const ts = now.getFullYear() + '-' +
+    String(now.getMonth()+1).padStart(2,'0') + '-' +
+    String(now.getDate()).padStart(2,'0') + ' ' +
+    String(now.getHours()).padStart(2,'0') + ':' +
+    String(now.getMinutes()).padStart(2,'0') + ':' +
+    String(now.getSeconds()).padStart(2,'0');
+  const entry = { time: ts, type, message, details: details || '' };
+  operationLogs.unshift(entry);
+  if (operationLogs.length > 200) operationLogs.pop();
+  updateLogDisplay();
+  console.log(`[${ts}] [${type}] ${message}`, details || '');
+}
+
+function updateLogDisplay() {
+  const container = document.getElementById('log-container');
+  if (!container) return;
+  if (operationLogs.length === 0) {
+    container.innerHTML = '<div style="color:var(--text3);text-align:center;padding:12px;">暂无操作记录</div>';
+    return;
+  }
+  const colors = { success: 'var(--success)', error: 'var(--danger)', info: 'var(--primary)', warn: 'var(--warning)', default: 'var(--text2)' };
+  container.innerHTML = operationLogs.map(l => {
+    const c = colors[l.type] || colors.default;
+    return `<div style="margin-bottom:2px;"><span style="color:var(--text3)">${l.time}</span> <span style="color:${c};font-weight:600;">[${l.type.toUpperCase()}]</span> ${escHtml(l.message)}${l.details ? ' <span style="color:var(--text3)">'+escHtml(l.details)+'</span>' : ''}</div>`;
+  }).join('');
+}
+
+function clearLogs() {
+  operationLogs = [];
+  updateLogDisplay();
+  showToast('日志已清空', 'info');
+}
+
+// ==================== 设置面板 ====================
+function openSettings() {
+  $('#settings-apikey').value = aiApiKey;
+  $('#settings-apikey').type = 'password'; // 默认隐藏
+  $('#eye-open').style.display = 'block';
+  $('#eye-closed').style.display = 'none';
+  updateLogDisplay();
+  $('#settings-modal').style.display = 'flex';
+}
+
+function closeSettings() {
+  $('#settings-modal').style.display = 'none';
+}
+
+function saveApiKey() {
+  const key = $('#settings-apikey').value.trim();
+  if (key) {
+    aiApiKey = key;
     localStorage.setItem('ai_api_key', aiApiKey);
     showToast('✅ API Key 已保存', 'success');
+    logEvent('info', 'API Key 已更新');
   }
 }
+
+function toggleKeyVisibility() {
+  const input = $('#settings-apikey');
+  const openEye = $('#eye-open');
+  const closedEye = $('#eye-closed');
+  if (input.type === 'password') {
+    input.type = 'text';
+    openEye.style.display = 'none';
+    closedEye.style.display = 'block';
+  } else {
+    input.type = 'password';
+    openEye.style.display = 'block';
+    closedEye.style.display = 'none';
+  }
+}
+
+// 点击背景关闭设置
+document.addEventListener('DOMContentLoaded', () => {
+  const sm = $('#settings-modal');
+  if (sm) sm.addEventListener('click', function(e) { if (e.target === this) closeSettings(); });
+});
 
 // ==================== 数据预览面板 ====================
 function togglePreview() {
@@ -991,6 +1204,21 @@ function updatePreview(data) {
   if (panel.classList.contains('collapsed')) {
     togglePreview();
   }
+
+  // 存储用于搜索筛选
+  previewAllRows = data.rows || [];
+  previewAllFields = data.fields || [];
+  const ff = $('#preview-field-filter');
+  if (ff) ff.innerHTML = '<option value="">所有字段</option>' + data.fields.map(f => `<option value="${escHtml(f)}">${escHtml(f)}</option>`).join('');
+  // 更新总数显示
+  const limitSel = $('#preview-limit');
+  if (limitSel && data.totalRows > 0) {
+    if (data.totalRows <= 100) limitSel.value = '100';
+    else if (data.totalRows <= 500) limitSel.value = '500';
+    else limitSel.value = '100';
+  }
+  applyPreviewFilter();
+  updateDashboard();
 }
 
 function escHtml(str) {
@@ -1107,9 +1335,11 @@ async function uploadExcelFile(file) {
     currentSourceInfo = result.data.sourceInfo;
     updatePreview(result.data);
     updateSourceStatus(result.data.sourceInfo);
+    logEvent('success', 'Excel加载', `${result.fileName} - ${result.data.totalRows}行`);
     showToast(`✅ 成功加载: ${result.fileName} (${result.data.totalRows}行, ${result.data.fields.length}列)`, 'success');
     addSystemMessage(`✅ 已加载 **${escHtml(result.fileName)}**，共 ${result.data.totalRows.toLocaleString()} 行，${result.data.fields.length} 列`);
   } catch (err) {
+    logEvent('error', 'Excel加载失败', err.message);
     showToast('❌ ' + err.message, 'error');
     console.error('Excel upload error:', err);
   } finally {
@@ -1164,6 +1394,7 @@ async function connectMySQL() {
     $('#mysql-tables-group').style.display = 'block';
     $('#mysql-load-btn').style.display = 'block';
 
+    logEvent('success', 'MySQL连接成功', config.host + '/' + config.database + ' - ' + result.tables.length + '个表');
     showToast(`✅ 连接成功！找到 ${result.tables.length} 个表`, 'success');
     addSystemMessage(`🐬 已连接MySQL **${config.database}**，找到 ${result.tables.length} 个表，请选择表后点击"加载表数据"`);
   } catch (err) {
@@ -1192,9 +1423,11 @@ async function loadMySQLTable() {
     currentSourceInfo = result.data.sourceInfo;
     updatePreview(result.data);
     updateSourceStatus(result.data.sourceInfo);
+    logEvent('success', 'MySQL表加载', `${table} - ${result.data.totalRows}行`);
     showToast(`✅ 成功加载表: ${table} (${result.data.totalRows}行, ${result.data.fields.length}列)`, 'success');
     addSystemMessage(`✅ 已加载表 **${escHtml(table)}**，共 ${result.data.totalRows.toLocaleString()} 行，${result.data.fields.length} 列`);
   } catch (err) {
+    logEvent('error', 'MySQL表加载失败', err.message);
     showToast('❌ ' + err.message, 'error');
     console.error('MySQL load error:', err);
   } finally {
@@ -1356,79 +1589,30 @@ async function sendMessage() {
 
   addUserMessage(message, imageData);
   removeWelcome();
+  logEvent('info', '发送消息', message.substring(0, 60));
   isLoading = true;
   $('#send-btn').disabled = true;
 
   const loadingMsg = addLoadingMessage();
 
   try {
-    // Step 1: 从服务器获取数据上下文
-    const requestBody = { message, image: imageData ? imageData.dataUrl : null };
-    const ctxResult = await api('/api/chat', {
+    const requestBody = { message };
+    if (imageData) requestBody.image = imageData.dataUrl;
+
+    const result = await api('/api/chat', {
       method: 'POST',
       body: JSON.stringify(requestBody)
     });
 
-    if (ctxResult.noData) {
-      loadingMsg.remove();
-      addAssistantMessage(ctxResult.explanation, null);
-      isLoading = false;
-      $('#send-btn').disabled = false;
-      msgInput.focus();
-      return;
-    }
-
-    // Step 2: 浏览器直接调用 DeepSeek API（走用户本地代理）
-    const aiMessages = [
-      { role: 'system', content: ctxResult.systemPrompt },
-      { role: 'user', content: message }
-    ];
-
-    // 图片识别：转为base64 data URL嵌入文本
-    if (imageData) {
-      aiMessages[1].content = message + '\n\n[图片base64: ' + imageData.dataUrl + ']';
-    }
-
-    const aiResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + aiApiKey
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        max_tokens: 4096,
-        messages: aiMessages
-      })
-    });
-
-    if (!aiResponse.ok) {
-      const errData = await aiResponse.json().catch(() => ({}));
-      throw new Error('AI API 错误: ' + (errData.error?.message || aiResponse.status));
-    }
-
-    const aiData = await aiResponse.json();
-    const aiText = aiData.choices?.[0]?.message?.content || '';
-
-    // 解析JSON
-    let jsonStr = aiText;
-    const m = aiText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
-    if (m) jsonStr = m[1].trim();
-
-    let plan;
-    try {
-      plan = JSON.parse(jsonStr);
-    } catch {
-      throw new Error('AI返回格式解析失败: ' + aiText.substring(0, 200));
-    }
-
     loadingMsg.remove();
 
-    if (plan.operations && plan.operations.length > 0) {
-      addAssistantMessage(plan.explanation, plan);
-      currentPlan = plan;
+    if (result.noData) {
+      addAssistantMessage(result.explanation, null);
+    } else if (result.operations && result.operations.length > 0) {
+      addAssistantMessage(result.explanation, result);
+      currentPlan = result;
     } else {
-      addAssistantMessage(plan.explanation || 'AI未返回操作', null);
+      addAssistantMessage(result.explanation || 'AI未返回操作', null);
     }
   } catch (err) {
     loadingMsg.remove();
@@ -1438,13 +1622,6 @@ async function sendMessage() {
     $('#send-btn').disabled = false;
     msgInput.focus();
   }
-}
-
-// 解析 data URL 为 mediaType 和 base64
-function parseDataUrlForAI(dataUrl) {
-  const match = dataUrl.match(/^data:(image\/\w+);base64,(.+)$/);
-  if (match) return { mediaType: match[1], base64: match[2] };
-  return { mediaType: 'image/png', base64: dataUrl };
 }
 
 function addUserMessage(text, imageData) {
@@ -1523,6 +1700,7 @@ function addSystemMessage(text) {
 }
 
 function addErrorMessage(text) {
+  logEvent('error', '对话出错', text);
   const div = document.createElement('div');
   div.className = 'message assistant';
   div.innerHTML = `
@@ -1574,15 +1752,16 @@ async function executePlan() {
       updatePreview(result.data);
       addSystemMessage(`✅ 清洗完成！${result.summary}`);
       showToast('清洗完成!', 'success');
+      logEvent('success', '清洗执行成功', result.summary);
       refreshRecycleBadge();
-      checkSyncStatus(); // 检查是否需要显示同步按钮
+      checkSyncStatus();
 
-      // 如果是数据库数据源，提示用户可以同步
       if (result._canSync && result._syncInfo) {
         addSystemMessage('💡 清洗操作已在内存中完成，点击顶部 **💾 同步到数据库** 按钮将修改写入真实数据库');
       }
     } else {
       addErrorMessage(result.error);
+      logEvent('error', '清洗执行失败', result.error);
       showToast(result.error, 'error');
     }
   } catch (err) {
@@ -1730,6 +1909,252 @@ function downloadData() {
   window.open('/api/data/download', '_blank');
 }
 
+// ==================== 数据仪表盘 ====================
+async function updateDashboard() {
+  try {
+    const data = await api('/api/data/preview');
+    const schema = await api('/api/data/schema');
+    if (!data.sourceInfo) {
+      $('#dashboard').style.display = 'none';
+      return;
+    }
+    $('#dashboard').style.display = 'block';
+    $('#dash-rows').textContent = `📋 行: ${data.totalRows.toLocaleString()}`;
+    $('#dash-cols').textContent = `📌 列: ${data.fields.length}`;
+    const totalNulls = schema.reduce((s, f) => s + f.nullCount, 0);
+    const totalCells = data.totalRows * data.fields.length;
+    const nullRate = totalCells > 0 ? (totalNulls / totalCells * 100).toFixed(1) : 0;
+    $('#dash-nulls').textContent = `🕳️ 空值率: ${nullRate}%`;
+    // 简单重复检测
+    const keySet = new Set();
+    let dups = 0;
+    data.rows.forEach(r => { const k = JSON.stringify(r); if (keySet.has(k)) dups++; else keySet.add(k); });
+    const dupRate = data.totalRows > 0 ? (dups / data.totalRows * 100).toFixed(1) : 0;
+    $('#dash-dups').textContent = `🔄 重复率: ${dupRate}%`;
+    const st = data.sourceInfo;
+    $('#dash-source').textContent = `来源: ${(st.type||'').toUpperCase()} · ${st.name || ''}${st.table ? ' / ' + st.table : ''}`;
+    $('#diagnose-btn').style.display = 'inline-flex';
+  } catch (e) { $('#dashboard').style.display = 'none'; }
+}
+
+// ==================== 智能诊断 ====================
+async function smartDiagnose() {
+  showToast('🔍 AI 正在扫描数据...', 'info');
+  logEvent('info', '智能诊断', 'AI扫描数据开始');
+  try {
+    const result = await api('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        message: '请对当前数据进行智能诊断：1.列出空值超过30%的字段 2.列出明显重复的行 3.列出可能的异常值（如超出合理范围的数值）4.给出具体的清洗建议和操作计划。请以JSON格式返回，explanation中包含诊断结果摘要。'
+      })
+    });
+    if (result.operations && result.operations.length > 0) {
+      addAssistantMessage(result.explanation || '诊断完成', result);
+      currentPlan = result;
+      logEvent('success', '智能诊断完成', result.operations.length + '个建议操作');
+    } else {
+      addAssistantMessage(result.explanation || '✅ 数据质量良好，未发现明显问题', null);
+      logEvent('success', '智能诊断完成', '数据质量良好');
+    }
+  } catch (err) {
+    addErrorMessage('智能诊断失败: ' + err.message);
+  }
+}
+
+// ==================== 清洗模板 ====================
+// 保存：下载为本地JSON文件
+function saveTemplate() {
+  if (!currentPlan || !currentPlan.operations) {
+    showToast('❌ 没有可保存的清洗计划', 'error');
+    return;
+  }
+  const name = '清洗模板_' + new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const template = {
+    name: name,
+    operations: currentPlan.operations,
+    date: new Date().toISOString(),
+    fields: previewAllFields || []
+  };
+  const blob = new Blob([JSON.stringify(template, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('✅ 模板已保存: ' + name + '.json', 'success');
+  logEvent('success', '模板保存到本地', name);
+}
+
+// 载入：通过拖拽或选择JSON文件
+let loadedTemplate = null;
+function loadTemplate() {
+  // 清空之前的模板状态
+  loadedTemplate = null;
+  const list = $('#template-list');
+  list.innerHTML = `
+    <div class="upload-zone" id="template-drop-zone" style="margin:0;padding:30px;">
+      <div class="upload-icon">📂</div>
+      <div class="upload-text">拖拽模板文件到此处</div>
+      <div class="upload-hint">或点击选择 .json 模板文件</div>
+    </div>
+    <input type="file" id="template-file-input" accept=".json" hidden>
+    <div id="template-preview" style="display:none;margin-top:12px;padding:12px;background:var(--primary-light);border-radius:6px;font-size:13px;"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="btn btn-primary btn-sm" id="template-apply-btn" style="display:none;" onclick="applyLoadedTemplate()">应用此模板</button>
+      <button class="btn btn-outline btn-sm" onclick="closeTemplateModal()">取消</button>
+    </div>
+  `;
+  $('#template-modal').style.display = 'flex';
+
+  // 绑定拖拽事件
+  const zone = $('#template-drop-zone');
+  zone.addEventListener('click', () => $('#template-file-input').click());
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) readTemplateFile(file);
+  });
+  $('#template-file-input').addEventListener('change', function() {
+    if (this.files[0]) readTemplateFile(this.files[0]);
+  });
+}
+
+function readTemplateFile(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      loadedTemplate = JSON.parse(reader.result);
+      if (!loadedTemplate.operations || !Array.isArray(loadedTemplate.operations)) {
+        showToast('❌ 无效的模板文件', 'error');
+        return;
+      }
+      const prev = $('#template-preview');
+      prev.innerHTML = `<strong>📋 ${escHtml(loadedTemplate.name||'未命名模板')}</strong><br>
+        操作数: ${loadedTemplate.operations.length} · 保存日期: ${loadedTemplate.date?.slice(0,10)||'未知'}<br>
+        <span style="color:var(--text3);font-size:11px;">${loadedTemplate.operations.map(o => o.type+': '+o.field).join(', ')}</span>`;
+      prev.style.display = 'block';
+      $('#template-apply-btn').style.display = 'inline-flex';
+    } catch (e) {
+      showToast('❌ JSON解析失败', 'error');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function applyLoadedTemplate() {
+  if (!loadedTemplate) return;
+  currentPlan = {
+    operations: loadedTemplate.operations,
+    explanation: `应用模板: ${loadedTemplate.name || '未命名'}`,
+    confidence: 'high',
+    askConfirm: true
+  };
+  addAssistantMessage(`📂 已加载模板: **${loadedTemplate.name||'未命名'}**（${loadedTemplate.operations.length}个操作）`, currentPlan);
+  closeTemplateModal();
+  logEvent('info', '模板应用', loadedTemplate.name);
+}
+
+function closeTemplateModal() { $('#template-modal').style.display = 'none'; }
+
+// ==================== 导出报告 ====================
+async function downloadReport() {
+  showToast('正在生成报告...', 'info');
+  try {
+    const [data, schema] = await Promise.all([
+      api('/api/data/preview?limit=999999'),
+      api('/api/data/schema')
+    ]);
+    // 构建报告HTML
+    const rows = data.rows.map((r, i) => `<tr>${data.fields.map(f => `<td>${escHtml(String(r[f]??''))}</td>`).join('')}</tr>`).join('');
+    const logRows = operationLogs.map(l => `<tr><td>${l.time}</td><td>${l.type}</td><td>${escHtml(l.message)}</td><td>${escHtml(l.details)}</td></tr>`).join('');
+    const statsRows = schema.map(f => `<tr><td>${escHtml(f.name)}</td><td>${f.type}</td><td>${f.nullCount}</td><td>${f.uniqueCount}</td></tr>`).join('');
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>数据清洗报告</title>
+<style>body{font-family:sans-serif;padding:20px}h1{color:#4f46e5}table{border-collapse:collapse;width:100%;margin:10px 0}th,td{border:1px solid #ddd;padding:8px;font-size:12px}th{background:#f5f6fa}.section{margin:20px 0}</style></head><body>
+<h1>📋 数据清洗报告</h1><p>生成时间: ${new Date().toLocaleString()}</p>
+<div class="section"><h2>📊 数据概况</h2><p>总行数: ${data.totalRows} | 字段数: ${data.fields.length} | 数据源: ${(data.sourceInfo?.type||'').toUpperCase()} · ${data.sourceInfo?.name||''}</p></div>
+<div class="section"><h2>📌 字段统计</h2><table><tr><th>字段名</th><th>类型</th><th>空值数</th><th>唯一值数</th></tr>${statsRows}</table></div>
+<div class="section"><h2>📋 操作日志</h2><table><tr><th>时间</th><th>类型</th><th>消息</th><th>详情</th></tr>${logRows}</table></div>
+<div class="section"><h2>📄 当前数据</h2><table><tr>${data.fields.map(f=>`<th>${escHtml(f)}</th>`).join('')}</tr>${rows}</table></div>
+</body></html>`;
+
+    const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `清洗报告_${new Date().toISOString().slice(0,10)}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('✅ 报告已下载', 'success');
+    logEvent('success', '报告导出');
+  } catch (err) { showToast('❌ ' + err.message, 'error'); }
+}
+
+// ==================== 预览搜索筛选 ====================
+let previewAllRows = [];
+let previewAllFieldsStore = [];
+
+async function reloadPreviewData() {
+  const limitSel = $('#preview-limit');
+  if (!limitSel) return;
+  const limit = parseInt(limitSel.value);
+  const isAll = (limit === 0);
+  const label = isAll ? '全部数据' : (limit + '条');
+
+  showToast('⏳ 正在加载 ' + label + '...', 'info');
+  try {
+    if (currentSourceInfo && currentSourceInfo.type === 'mysql' && (isAll || limit > 5000)) {
+      const actualLimit = isAll ? 100000 : limit;
+      const result = await api('/api/reload-preview', {
+        method: 'POST',
+        body: JSON.stringify({ table: currentSourceInfo.table, limit: actualLimit })
+      });
+      previewAllRows = result.rows || [];
+      previewAllFieldsStore = result.fields || [];
+    } else {
+      const url = isAll ? '/api/data/preview?limit=999999' : `/api/data/preview?limit=${limit}`;
+      const data = await api(url);
+      previewAllRows = data.rows || [];
+      previewAllFieldsStore = data.fields || [];
+    }
+    applyPreviewFilter();
+    showToast('✅ 已加载 ' + label + '（共 ' + previewAllRows.length.toLocaleString() + ' 行）', 'success');
+  } catch (e) {
+    showToast('❌ 加载失败: ' + (e.message || '未知错误'), 'error');
+    console.error('Reload error:', e);
+  }
+}
+let previewAllFields = [];
+
+function applyPreviewFilter() {
+  const search = ($('#preview-search')?.value || '').toLowerCase();
+  const fieldFilter = $('#preview-field-filter')?.value || '';
+  const fields = previewAllFields.length > 0 ? previewAllFields : previewAllFieldsStore;
+  let rows = previewAllRows;
+  if (search) {
+    rows = rows.filter(r => fields.some(f => String(r[f]??'').toLowerCase().includes(search)));
+  }
+  if (fieldFilter && search) {
+    rows = rows.filter(r => String(r[fieldFilter]??'').toLowerCase().includes(search));
+  }
+  renderPreviewTable(fields, rows);
+  if ($('#preview-filter-count')) {
+    $('#preview-filter-count').textContent = `显示 ${rows.length}/${previewAllRows.length}`;
+  }
+}
+
+function renderPreviewTable(fields, rows) {
+  const head = $('#preview-head');
+  const body = $('#preview-body');
+  if (!head || !body) return;
+  head.innerHTML = '<tr>' + fields.map(f => `<th>${escHtml(f)}</th>`).join('') + '</tr>';
+  body.innerHTML = rows.map(row =>
+    '<tr>' + fields.map(f => `<td>${escHtml(String(row[f] ?? ''))}</td>`).join('') + '</tr>'
+  ).join('');
+}
+
 async function syncToDatabase() {
   // 先获取待同步的预览信息
   let preview;
@@ -1777,18 +2202,21 @@ async function syncToDatabase() {
   btn.textContent = '⏳ 同步中...';
   btn.disabled = true;
 
+  logEvent('info', '开始数据库同步', preview.table + ' - ' + preview.operationCount + '个操作');
   try {
     const result = await api('/api/sync-to-db', { method: 'POST' });
     if (result.success) {
       showToast('✅ ' + result.message, 'success');
       addSystemMessage('💾 **数据库同步完成**: ' + result.message);
-      // 同步成功后隐藏按钮
+      logEvent('success', '数据库同步成功', result.message);
       $('#sync-db-btn').style.display = 'none';
     } else {
       showToast('❌ ' + result.message, 'error');
+      logEvent('error', '数据库同步失败', result.message);
     }
   } catch (err) {
     showToast('❌ 同步失败: ' + err.message, 'error');
+    logEvent('error', '数据库同步异常', err.message);
   } finally {
     btn.textContent = '💾 同步到数据库';
     btn.disabled = false;
@@ -1852,6 +2280,396 @@ function renderMarkdown(text) {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\n/g, '<br>')
     .replace(/`(.+?)`/g, '<code>$1</code>');
+}
+
+// ==================== 模块切换 ====================
+let currentModule = 'clean';
+
+function switchModule(module) {
+  currentModule = module;
+  $$('.module-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.module-tab[data-module="${module}"]`)?.classList.add('active');
+
+  if (module === 'clean') {
+    $('#chat-area').style.display = '';
+    $('#input-area').style.display = '';
+    $('#analyze-panel').style.display = 'none';
+    $('#dashboard').style.display = currentSourceInfo ? 'block' : 'none';
+  } else {
+    $('#chat-area').style.display = 'none';
+    $('#input-area').style.display = 'none';
+    $('#analyze-panel').style.display = 'flex';
+    $('#dashboard').style.display = currentSourceInfo ? 'block' : 'none';
+  }
+}
+
+// ==================== 数据分析 ====================
+let currentChart = null;
+let isAnalyzing = false;
+
+async function sendAnalyze() {
+  const question = $('#analyze-input').value.trim();
+  if (!question || isAnalyzing) return;
+  $('#analyze-input').value = '';
+  isAnalyzing = true;
+
+  const welcome = document.querySelector('#analyze-chat .welcome');
+  if (welcome) welcome.style.display = 'none';
+
+  const report = $('#bi-report');
+  report.style.display = 'block';
+  report.innerHTML = `<div style="text-align:center;padding:40px;"><div class="typing-indicator"><span></span><span></span><span></span></div><p style="color:var(--text3);margin-top:8px;">AI 正在分析...</p></div>`;
+
+  try {
+    const result = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ question }) });
+
+    if (currentChart) { currentChart.destroy(); currentChart = null; }
+
+    let html = '';
+    if (result.queryResult && result.queryResult.length > 0) {
+      const cols = result.columns || Object.keys(result.queryResult[0]);
+      const data = result.queryResult;
+      const numCols = cols.filter(c => data.some(r => typeof r[c] === 'number' && !isNaN(r[c])));
+      const labelCol = cols.find(c => data.some(r => typeof r[c] === 'string' || typeof r[c] === 'number')) || cols[0];
+      const valueCol = numCols.length > 0 ? numCols[0] : cols[1] || cols[0];
+
+      // 指标卡
+      const total = data.length;
+      const sumVal = numCols.length > 0 ? data.reduce((s, r) => s + (Number(r[numCols[0]]) || 0), 0) : 0;
+      const maxVal = numCols.length > 0 ? Math.max(...data.map(r => Number(r[numCols[0]]) || 0)) : 0;
+      const avgVal = numCols.length > 0 ? Math.round(sumVal / total) : 0;
+
+      html += `<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;">
+        <div class="metric-card"><div class="metric-val">${total.toLocaleString()}</div><div class="metric-label">总计（条）</div></div>
+        ${sumVal > 0 ? `<div class="metric-card"><div class="metric-val">${sumVal.toLocaleString()}</div><div class="metric-label">合计</div></div>` : ''}
+        ${maxVal > 0 ? `<div class="metric-card"><div class="metric-val">${maxVal.toLocaleString()}</div><div class="metric-label">最大值</div></div>` : ''}
+        ${avgVal > 0 ? `<div class="metric-card"><div class="metric-val">${avgVal.toLocaleString()}</div><div class="metric-label">平均值</div></div>` : ''}
+        <div class="metric-card"><div class="metric-val">${cols.length}</div><div class="metric-label">维度</div></div>
+      </div>`;
+
+      // AI 建议的图表类型
+      const aiChartType = result.chartType || 'bar';
+      const mapId = 'bi-map-' + Date.now();
+      const ecId = 'bi-ec-' + Date.now();
+      const chartId = 'bi-chart-' + Date.now();
+
+      html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+          <strong style="font-size:13px;">📊 ${escHtml(result.explanation?.substring(0,50) || '分析结果')}</strong>
+          <div style="display:flex;gap:4px;align-items:center;">
+            <select id="${chartId}-sort" onchange="resortData('${chartId}','${escHtml(labelCol)}','${escHtml(valueCol)}','${ecId}')" style="padding:2px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px;">
+              <option value="desc">降序</option><option value="asc">升序</option>
+            </select>
+            <select id="${chartId}-top" onchange="resortData('${chartId}','${escHtml(labelCol)}','${escHtml(valueCol)}','${ecId}')" style="padding:2px 6px;font-size:11px;border:1px solid var(--border);border-radius:4px;">
+              <option value="0">全部</option><option value="5">Top5</option><option value="10" selected>Top10</option><option value="20">Top20</option><option value="50">Top50</option>
+            </select>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('bar','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">柱状</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('pie','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">扇形</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('line','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">折线</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('scatter','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">散点</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('radar','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">雷达</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('funnel','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">漏斗</button>
+            <button class="btn btn-sm btn-outline" onclick="renderBiChart('treemap','${chartId}','${ecId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;">树图</button>
+            <button class="btn btn-sm btn-outline" onclick="showChinaMap('${mapId}','${chartId}','${escHtml(labelCol)}','${escHtml(valueCol)}')" style="font-size:10px;padding:2px 8px;" title="地图">地图</button>
+          </div>
+        </div>
+        <div style="height:400px;position:relative;" id="${chartId}-container">
+          <canvas id="${chartId}" style="display:none;"></canvas>
+          <div id="${ecId}" style="width:100%;height:100%;"></div>
+        </div>
+        <div id="${mapId}" style="display:none;height:400px;position:relative;"></div>
+      </div>`;
+
+      // 存储完整数据
+      window['_bi_data_' + chartId] = { data: data, labels: [], values: [], labelCol, valueCol, chartType: aiChartType, ecId: ecId };
+      window['_bi_map_' + chartId] = { data: data, labelCol, valueCol };
+
+      // 数据表格（可折叠）
+      html += `<details style="font-size:12px;"><summary style="cursor:pointer;color:var(--text2);padding:4px 0;">📋 查看数据明细（${data.length}条）</summary>
+        <div style="max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:6px;margin-top:8px;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead><tr>${cols.map(c => `<th style="padding:6px 8px;text-align:left;border-bottom:1px solid var(--border);background:var(--surface2);position:sticky;top:0;">${escHtml(c)}</th>`).join('')}</tr></thead>
+          <tbody>${data.slice(0, 200).map(r => `<tr>${cols.map(c => `<td style="padding:4px 8px;border-bottom:1px solid var(--border);">${escHtml(String(r[c]??''))}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div></details>`;
+
+      // 渲染图表
+      setTimeout(() => { const bd = window['_bi_data_' + chartId]; if (bd) { renderBiChart(aiChartType, chartId, ecId, labelCol, valueCol); } }, 300);
+
+    } else if (result.sqlError) {
+      html += `<div style="color:var(--danger);">SQL错误: ${escHtml(result.sqlError)}</div>`;
+    } else {
+      html += `<div style="color:var(--text2);">${escHtml(result.explanation || '未找到分析结果')}</div>`;
+    }
+
+    report.innerHTML = html;
+    report.scrollIntoView({ behavior: 'smooth' });
+    isAnalyzing = false;
+  } catch (err) {
+    report.innerHTML = `<div style="color:var(--danger);text-align:center;padding:20px;">分析失败: ${escHtml(err.message)}</div>`;
+    isAnalyzing = false;
+  }
+}
+
+function getBiSlice(chartId) {
+  const biData = window['_bi_data_' + chartId];
+  if (!biData) return { labels: [], values: [] };
+  const topSel = document.getElementById(chartId + '-top');
+  const sortSel = document.getElementById(chartId + '-sort');
+  const topN = parseInt(topSel?.value) || 0;
+  const sortDir = sortSel?.value || 'desc';
+
+  let sliced = [...biData.data].sort((a, b) => {
+    const va = Number(a[biData.valueCol]) || 0, vb = Number(b[biData.valueCol]) || 0;
+    return sortDir === 'asc' ? va - vb : vb - va;
+  });
+
+  if (topN > 0) sliced = sliced.slice(0, topN);
+
+  return {
+    labels: sliced.map(r => String(r[biData.labelCol] ?? '')).slice(0, 50),
+    values: sliced.map(r => Number(r[biData.valueCol]) || 0).slice(0, 50),
+    labelCol: biData.labelCol,
+    valueCol: biData.valueCol
+  };
+}
+
+let biEchartsInst = {};
+
+function renderBiChart(type, chartId, ecId, labelCol, valueCol) {
+  const biData = window['_bi_data_' + chartId];
+  if (!biData) return;
+  biData.chartType = type;
+  const slice = getBiSlice(chartId);
+  const container = document.getElementById(chartId + '-container');
+  const canvas = document.getElementById(chartId);
+  const ecDiv = document.getElementById(ecId);
+  if (!container || !ecDiv) return;
+
+  // 清理旧实例
+  if (biEchartsInst[ecId]) { biEchartsInst[ecId].dispose(); delete biEchartsInst[ecId]; }
+  if (currentChart) { currentChart.destroy(); currentChart = null; }
+  const mapDiv = document.getElementById(chartId.replace('bi-chart-', 'bi-map-'));
+  if (mapDiv) mapDiv.style.display = 'none';
+
+  const colors = ['#4f46e5','#10b981','#f59e0b','#ef4444','#06b6d4','#8b5cf6','#ec4899','#f97316','#84cc16','#14b8a6'];
+
+  // 简单图表用 Chart.js
+  if (['bar','pie','doughnut','line'].includes(type)) {
+    ecDiv.style.display = 'none'; canvas.style.display = 'block';
+    currentChart = new Chart(canvas, {
+      type: type === 'doughnut' ? 'doughnut' : type,
+      data: { labels: slice.labels, datasets: [{ label: slice.valueCol, data: slice.values, backgroundColor: (type==='pie'||type==='doughnut')?colors:'rgba(79,70,229,0.7)', borderColor: '#4f46e5', borderWidth: 1 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: type==='pie'||type==='doughnut' } } }
+    });
+    return;
+  }
+
+  // 复杂图表用 ECharts
+  canvas.style.display = 'none'; ecDiv.style.display = 'block';
+  const ec = echarts.init(ecDiv);
+  biEchartsInst[ecId] = ec;
+
+  const opts = { tooltip: {}, grid: { left: '10%', right: '5%', bottom: '10%', top: '5%' } };
+
+  if (type === 'scatter') {
+    ec.setOption({ ...opts, xAxis: { type: 'value', name: slice.labelCol }, yAxis: { type: 'value', name: slice.valueCol }, series: [{ type: 'scatter', data: slice.labels.map((l,i) => [Number(slice.values[i])||0, Number(l)||0]), symbolSize: 10, itemStyle: { color: colors[0] } }] });
+  } else if (type === 'radar') {
+    const indicator = slice.labels.slice(0, 8).map(l => ({ name: l.substring(0, 6), max: Math.max(...slice.values) * 1.2 }));
+    ec.setOption({ tooltip: {}, radar: { indicator }, series: [{ type: 'radar', data: [{ value: slice.values, name: slice.valueCol }], areaStyle: { opacity: 0.3 } }] });
+  } else if (type === 'funnel') {
+    ec.setOption({ tooltip: {}, series: [{ type: 'funnel', left: '15%', width: '70%', sort: 'descending', data: slice.labels.map((l,i) => ({ name: l.substring(0,15), value: slice.values[i] })) }] });
+  } else if (type === 'treemap') {
+    ec.setOption({ tooltip: {}, series: [{ type: 'treemap', data: slice.labels.map((l,i) => ({ name: l.substring(0,10), value: slice.values[i] })), label: { fontSize: 10 } }] });
+  } else if (type === 'wordcloud') {
+    ec.setOption({ tooltip: {}, series: [{ type: 'wordCloud', shape: 'circle', sizeRange: [12, 40], rotationRange: [0, 0], data: slice.labels.map((l,i) => ({ name: l.substring(0,10), value: slice.values[i] || 1 })) }] });
+  }
+}
+
+function resortData(chartId, labelCol, valueCol, ecId) {
+  const biData = window['_bi_data_' + chartId];
+  if (!biData || !biData.chartType) return;
+  renderBiChart(biData.chartType, chartId, ecId || biData.ecId, labelCol, valueCol);
+}
+
+// 中国地图
+let chinaMapInstance = null;
+let chinaMapGeoLoaded = false;
+
+const PROVINCE_MAP = {
+  '北京':'北京市','天津':'天津市','上海':'上海市','重庆':'重庆市',
+  '河北':'河北省','山西':'山西省','辽宁':'辽宁省','吉林':'吉林省','黑龙江':'黑龙江省',
+  '江苏':'江苏省','浙江':'浙江省','安徽':'安徽省','福建':'福建省','江西':'江西省','山东':'山东省',
+  '河南':'河南省','湖北':'湖北省','湖南':'湖南省','广东':'广东省','海南':'海南省',
+  '四川':'四川省','贵州':'贵州省','云南':'云南省','陕西':'陕西省','甘肃':'甘肃省','青海':'青海省',
+  '台湾':'台湾省','内蒙古':'内蒙古自治区','广西':'广西壮族自治区','西藏':'西藏自治区','宁夏':'宁夏回族自治区','新疆':'新疆维吾尔自治区',
+  '香港':'香港特别行政区','澳门':'澳门特别行政区'
+};
+
+function extractProvince(name) {
+  if (!name) return null;
+  name = String(name).trim();
+
+  // 先直接匹配标准省名
+  const stdNames = Object.values(PROVINCE_MAP);
+  for (const p of stdNames) {
+    if (name === p) return p;
+    const short = p.replace(/省|市|自治区|特别行政区|壮族|回族|维吾尔/g, '');
+    if (name === short || name.startsWith(short)) return p;
+  }
+
+  // 关键词匹配（省/自治区/市）
+  for (const [key, full] of Object.entries(PROVINCE_MAP)) {
+    if (name.includes(key)) return full;
+  }
+
+  // 精确市/县/区名 → 省份映射（覆盖全国主要城市）
+  const cityMap = {
+    // 直辖市
+    '东城':'北京市','西城':'北京市','朝阳':'北京市','海淀':'北京市','丰台':'北京市','通州':'北京市','大兴':'北京市','顺义':'北京市','昌平':'北京市','房山':'北京市','密云':'北京市','延庆':'北京市','平谷':'北京市','怀柔':'北京市','石景山':'北京市','门头沟':'北京市',
+    '浦东':'上海市','黄浦':'上海市','徐汇':'上海市','长宁':'上海市','静安':'上海市','普陀':'上海市','虹口':'上海市','杨浦':'上海市','闵行':'上海市','宝山':'上海市','嘉定':'上海市','松江':'上海市','青浦':'上海市','奉贤':'上海市','崇明':'上海市','金山':'上海市',
+    '滨海':'天津市','和平':'天津市','河东':'天津市','河西':'天津市','南开':'天津市','河北':'天津市','红桥':'天津市','东丽':'天津市','西青':'天津市','津南':'天津市','北辰':'天津市','武清':'天津市','宝坻':'天津市','宁河':'天津市','静海':'天津市','蓟州':'天津市',
+    '渝中':'重庆市','万州':'重庆市','涪陵':'重庆市','江北':'重庆市','沙坪坝':'重庆市','九龙坡':'重庆市','南岸':'重庆市','北碚':'重庆市','渝北':'重庆市','巴南':'重庆市','长寿':'重庆市','江津':'重庆市','合川':'重庆市','永川':'重庆市','南川':'重庆市','綦江':'重庆市','大足':'重庆市','璧山':'重庆市','铜梁':'重庆市','潼南':'重庆市','荣昌':'重庆市',
+    // 河北
+    '石家庄':'河北省','唐山':'河北省','秦皇岛':'河北省','邯郸':'河北省','邢台':'河北省','保定':'河北省','张家口':'河北省','承德':'河北省','沧州':'河北省','廊坊':'河北省','衡水':'河北省','雄安':'河北省','定州':'河北省','辛集':'河北省','任丘':'河北省','泊头':'河北省','霸州':'河北省','三河':'河北省','涿州':'河北省','高碑店':'河北省','迁安':'河北省','遵化':'河北省','武安':'河北省','沙河':'河北省','南宫':'河北省','新乐':'河北省','晋州':'河北省','鹿泉':'河北省','藁城':'河北省','栾城':'河北省','正定':'河北省','赵县':'河北省','清河':'河北省','宁晋':'河北省','威县':'河北省','隆尧':'河北省','临城':'河北省','广宗':'河北省','平乡':'河北省','南和':'河北省','巨鹿':'河北省','新河':'河北省','内丘':'河北省','柏乡':'河北省','任县':'河北省',
+    // 山西
+    '太原':'山西省','大同':'山西省','阳泉':'山西省','长治':'山西省','晋城':'山西省','朔州':'山西省','晋中':'山西省','运城':'山西省','忻州':'山西省','临汾':'山西省','吕梁':'山西省','孝义':'山西省','汾阳':'山西省','介休':'山西省','原平':'山西省','侯马':'山西省','霍州':'山西省','永济':'山西省','河津':'山西省','潞城':'山西省','高平':'山西省','古交':'山西省',
+    // 内蒙古
+    '呼和浩特':'内蒙古自治区','包头':'内蒙古自治区','乌海':'内蒙古自治区','赤峰':'内蒙古自治区','通辽':'内蒙古自治区','鄂尔多斯':'内蒙古自治区','呼伦贝尔':'内蒙古自治区','巴彦淖尔':'内蒙古自治区','乌兰察布':'内蒙古自治区','兴安':'内蒙古自治区','锡林郭勒':'内蒙古自治区','阿拉善':'内蒙古自治区','满洲里':'内蒙古自治区','扎兰屯':'内蒙古自治区','牙克石':'内蒙古自治区','根河':'内蒙古自治区','额尔古纳':'内蒙古自治区','乌兰浩特':'内蒙古自治区','阿尔山':'内蒙古自治区','霍林郭勒':'内蒙古自治区','二连浩特':'内蒙古自治区','丰镇':'内蒙古自治区','锡林浩特':'内蒙古自治区',
+    // 辽宁
+    '沈阳':'辽宁省','大连':'辽宁省','鞍山':'辽宁省','抚顺':'辽宁省','本溪':'辽宁省','丹东':'辽宁省','锦州':'辽宁省','营口':'辽宁省','阜新':'辽宁省','辽阳':'辽宁省','盘锦':'辽宁省','铁岭':'辽宁省','朝阳':'辽宁省','葫芦岛':'辽宁省','瓦房店':'辽宁省','庄河':'辽宁省','海城':'辽宁省','东港':'辽宁省','凤城':'辽宁省','凌海':'辽宁省','北镇':'辽宁省','盖州':'辽宁省','大石桥':'辽宁省','灯塔':'辽宁省','调兵山':'辽宁省','开原':'辽宁省','北票':'辽宁省','凌源':'辽宁省','兴城':'辽宁省',
+    // 吉林
+    '长春':'吉林省','吉林':'吉林省','四平':'吉林省','辽源':'吉林省','通化':'吉林省','白山':'吉林省','松原':'吉林省','白城':'吉林省','延边':'吉林省','延吉':'吉林省','图们':'吉林省','敦化':'吉林省','珲春':'吉林省','龙井':'吉林省','和龙':'吉林省','公主岭':'吉林省','梅河口':'吉林省','集安':'吉林省','临江':'吉林省','大安':'吉林省','洮南':'吉林省','扶余':'吉林省','磐石':'吉林省','蛟河':'吉林省','桦甸':'吉林省','榆树':'吉林省','德惠':'吉林省',
+    // 黑龙江
+    '哈尔滨':'黑龙江省','齐齐哈尔':'黑龙江省','牡丹江':'黑龙江省','佳木斯':'黑龙江省','大庆':'黑龙江省','鸡西':'黑龙江省','双鸭山':'黑龙江省','伊春':'黑龙江省','七台河':'黑龙江省','鹤岗':'黑龙江省','黑河':'黑龙江省','绥化':'黑龙江省','大兴安岭':'黑龙江省','尚志':'黑龙江省','五常':'黑龙江省','讷河':'黑龙江省','宁安':'黑龙江省','海林':'黑龙江省','穆棱':'黑龙江省','绥芬河':'黑龙江省','富锦':'黑龙江省','同江':'黑龙江省','抚远':'黑龙江省','虎林':'黑龙江省','密山':'黑龙江省','铁力':'黑龙江省','北安':'黑龙江省','五大连池':'黑龙江省','安达':'黑龙江省','肇东':'黑龙江省','海伦':'黑龙江省',
+    // 江苏
+    '苏州':'江苏省','南京':'江苏省','无锡':'江苏省','徐州':'江苏省','常州':'江苏省','南通':'江苏省','连云港':'江苏省','淮安':'江苏省','盐城':'江苏省','扬州':'江苏省','镇江':'江苏省','泰州':'江苏省','宿迁':'江苏省','昆山':'江苏省','太仓':'江苏省','常熟':'江苏省','张家港':'江苏省','江阴':'江苏省','宜兴':'江苏省','邳州':'江苏省','新沂':'江苏省','溧阳':'江苏省','金坛':'江苏省','如皋':'江苏省','启东':'江苏省','海门':'江苏省','海安':'江苏省','如东':'江苏省','丹阳':'江苏省','扬中':'江苏省','句容':'江苏省','兴化':'江苏省','靖江':'江苏省','泰兴':'江苏省','高邮':'江苏省','仪征':'江苏省','东台':'江苏省','大丰':'江苏省',
+    // 浙江
+    '杭州':'浙江省','宁波':'浙江省','温州':'浙江省','嘉兴':'浙江省','湖州':'浙江省','绍兴':'浙江省','金华':'浙江省','衢州':'浙江省','舟山':'浙江省','台州':'浙江省','丽水':'浙江省','义乌':'浙江省','慈溪':'浙江省','余姚':'浙江省','海宁':'浙江省','桐乡':'浙江省','诸暨':'浙江省','嵊州':'浙江省','兰溪':'浙江省','东阳':'浙江省','永康':'浙江省','乐清':'浙江省','瑞安':'浙江省','温岭':'浙江省','临海':'浙江省','龙泉':'浙江省','江山':'浙江省','建德':'浙江省',
+    // 安徽
+    '合肥':'安徽省','芜湖':'安徽省','蚌埠':'安徽省','淮南':'安徽省','马鞍山':'安徽省','淮北':'安徽省','铜陵':'安徽省','安庆':'安徽省','黄山':'安徽省','滁州':'安徽省','阜阳':'安徽省','宿州':'安徽省','六安':'安徽省','亳州':'安徽省','池州':'安徽省','宣城':'安徽省','桐城':'安徽省','天长':'安徽省','明光':'安徽省','宁国':'安徽省','界首':'安徽省','蒙城':'安徽省','涡阳':'安徽省','利辛':'安徽省','太和':'安徽省','颍上':'安徽省','临泉':'安徽省','阜南':'安徽省',
+    // 福建
+    '福州':'福建省','厦门':'福建省','莆田':'福建省','三明':'福建省','泉州':'福建省','漳州':'福建省','南平':'福建省','龙岩':'福建省','宁德':'福建省','福清':'福建省','长乐':'福建省','永安':'福建省','石狮':'福建省','晋江':'福建省','南安':'福建省','龙海':'福建省','邵武':'福建省','武夷山':'福建省','建瓯':'福建省','福安':'福建省','福鼎':'福建省','漳平':'福建省',
+    // 江西
+    '南昌':'江西省','九江':'江西省','景德镇':'江西省','萍乡':'江西省','新余':'江西省','鹰潭':'江西省','赣州':'江西省','吉安':'江西省','宜春':'江西省','抚州':'江西省','上饶':'江西省','瑞金':'江西省','乐平':'江西省','共青城':'江西省','丰城':'江西省','樟树':'江西省','高安':'江西省','德兴':'江西省','井冈山':'江西省','贵溪':'江西省','瑞昌':'江西省','庐山':'江西省',
+    // 山东
+    '济南':'山东省','青岛':'山东省','淄博':'山东省','枣庄':'山东省','东营':'山东省','烟台':'山东省','潍坊':'山东省','济宁':'山东省','泰安':'山东省','威海':'山东省','日照':'山东省','临沂':'山东省','德州':'山东省','聊城':'山东省','滨州':'山东省','菏泽':'山东省','曲阜':'山东省','邹城':'山东省','兖州':'山东省','滕州':'山东省','新泰':'山东省','肥城':'山东省','乳山':'山东省','荣成':'山东省','文登':'山东省','即墨':'山东省','胶州':'山东省','平度':'山东省','莱西':'山东省','莱阳':'山东省','莱州':'山东省','龙口':'山东省','招远':'山东省','蓬莱':'山东省','栖霞':'山东省','海阳':'山东省','青州':'山东省','诸城':'山东省','寿光':'山东省','安丘':'山东省','高密':'山东省','昌邑':'山东省','临清':'山东省','乐陵':'山东省','禹城':'山东省',
+    // 河南
+    '郑州':'河南省','开封':'河南省','洛阳':'河南省','平顶山':'河南省','安阳':'河南省','鹤壁':'河南省','新乡':'河南省','焦作':'河南省','濮阳':'河南省','许昌':'河南省','漯河':'河南省','三门峡':'河南省','南阳':'河南省','商丘':'河南省','信阳':'河南省','周口':'河南省','驻马店':'河南省','济源':'河南省','巩义':'河南省','荥阳':'河南省','新密':'河南省','登封':'河南省','新郑':'河南省','偃师':'河南省','舞钢':'河南省','汝州':'河南省','林州':'河南省','卫辉':'河南省','辉县':'河南省','长垣':'河南省','沁阳':'河南省','孟州':'河南省','禹州':'河南省','长葛':'河南省','义马':'河南省','灵宝':'河南省','邓州':'河南省','永城':'河南省','项城':'河南省','固始':'河南省',
+    // 湖北
+    '武汉':'湖北省','黄石':'湖北省','十堰':'湖北省','宜昌':'湖北省','襄阳':'湖北省','鄂州':'湖北省','荆门':'湖北省','孝感':'湖北省','荆州':'湖北省','黄冈':'湖北省','咸宁':'湖北省','随州':'湖北省','恩施':'湖北省','仙桃':'湖北省','潜江':'湖北省','天门':'湖北省','神农架':'湖北省','大冶':'湖北省','丹江口':'湖北省','宜都':'湖北省','枝江':'湖北省','当阳':'湖北省','老河口':'湖北省','枣阳':'湖北省','宜城':'湖北省','钟祥':'湖北省','京山':'湖北省','沙洋':'湖北省','应城':'湖北省','安陆':'湖北省','汉川':'湖北省','石首':'湖北省','洪湖':'湖北省','松滋':'湖北省','麻城':'湖北省','武穴':'湖北省','赤壁':'湖北省','广水':'湖北省','利川':'湖北省',
+    // 湖南
+    '长沙':'湖南省','株洲':'湖南省','湘潭':'湖南省','衡阳':'湖南省','邵阳':'湖南省','岳阳':'湖南省','常德':'湖南省','张家界':'湖南省','益阳':'湖南省','郴州':'湖南省','永州':'湖南省','怀化':'湖南省','娄底':'湖南省','湘西':'湖南省','浏阳':'湖南省','醴陵':'湖南省','湘乡':'湖南省','韶山':'湖南省','耒阳':'湖南省','常宁':'湖南省','武冈':'湖南省','临湘':'湖南省','汨罗':'湖南省','津市':'湖南省','沅江':'湖南省','资兴':'湖南省','洪江':'湖南省','冷水江':'湖南省','涟源':'湖南省','吉首':'湖南省','凤凰':'湖南省','龙山':'湖南省','永顺':'湖南省',
+    // 广东
+    '广州':'广东省','韶关':'广东省','深圳':'广东省','珠海':'广东省','汕头':'广东省','佛山':'广东省','江门':'广东省','湛江':'广东省','茂名':'广东省','肇庆':'广东省','惠州':'广东省','梅州':'广东省','汕尾':'广东省','河源':'广东省','阳江':'广东省','清远':'广东省','东莞':'广东省','中山':'广东省','潮州':'广东省','揭阳':'广东省','云浮':'广东省','增城':'广东省','从化':'广东省','乐昌':'广东省','南雄':'广东省','台山':'广东省','开平':'广东省','恩平':'广东省','鹤山':'广东省','廉江':'广东省','雷州':'广东省','吴川':'广东省','高州':'广东省','化州':'广东省','信宜':'广东省','四会':'广东省','高要':'广东省','陆丰':'广东省','阳春':'广东省','英德':'广东省','连州':'广东省','普宁':'广东省','罗定':'广东省','顺德':'广东省','南海':'广东省','番禺':'广东省',
+    // 广西
+    '南宁':'广西壮族自治区','柳州':'广西壮族自治区','桂林':'广西壮族自治区','梧州':'广西壮族自治区','北海':'广西壮族自治区','防城港':'广西壮族自治区','钦州':'广西壮族自治区','贵港':'广西壮族自治区','玉林':'广西壮族自治区','百色':'广西壮族自治区','贺州':'广西壮族自治区','河池':'广西壮族自治区','来宾':'广西壮族自治区','崇左':'广西壮族自治区','岑溪':'广西壮族自治区','东兴':'广西壮族自治区','桂平':'广西壮族自治区','北流':'广西壮族自治区','宜州':'广西壮族自治区','合山':'广西壮族自治区','凭祥':'广西壮族自治区','荔浦':'广西壮族自治区','阳朔':'广西壮族自治区',
+    // 海南
+    '海口':'海南省','三亚':'海南省','三沙':'海南省','儋州':'海南省','文昌':'海南省','琼海':'海南省','万宁':'海南省','五指山':'海南省','东方':'海南省','定安':'海南省','屯昌':'海南省','澄迈':'海南省','临高':'海南省','白沙':'海南省','昌江':'海南省','乐东':'海南省','陵水':'海南省','保亭':'海南省','琼中':'海南省',
+    // 四川
+    '成都':'四川省','自贡':'四川省','攀枝花':'四川省','泸州':'四川省','德阳':'四川省','绵阳':'四川省','广元':'四川省','遂宁':'四川省','内江':'四川省','乐山':'四川省','南充':'四川省','眉山':'四川省','宜宾':'四川省','广安':'四川省','达州':'四川省','雅安':'四川省','巴中':'四川省','资阳':'四川省','阿坝':'四川省','甘孜':'四川省','凉山':'四川省','西昌':'四川省','都江堰':'四川省','彭州':'四川省','邛崃':'四川省','崇州':'四川省','广汉':'四川省','什邡':'四川省','绵竹':'四川省','江油':'四川省','峨眉山':'四川省','阆中':'四川省','华蓥':'四川省','万源':'四川省',
+    // 贵州
+    '贵阳':'贵州省','六盘水':'贵州省','遵义':'贵州省','安顺':'贵州省','毕节':'贵州省','铜仁':'贵州省','黔西南':'贵州省','黔东南':'贵州省','黔南':'贵州省','仁怀':'贵州省','赤水':'贵州省','清镇':'贵州省','盘州':'贵州省','兴义':'贵州省','凯里':'贵州省','都匀':'贵州省','福泉':'贵州省',
+    // 云南
+    '昆明':'云南省','曲靖':'云南省','玉溪':'云南省','保山':'云南省','昭通':'云南省','丽江':'云南省','普洱':'云南省','临沧':'云南省','楚雄':'云南省','红河':'云南省','文山':'云南省','西双版纳':'云南省','大理':'云南省','德宏':'云南省','怒江':'云南省','迪庆':'云南省','安宁':'云南省','宣威':'云南省','蒙自':'云南省','个旧':'云南省','开远':'云南省','弥勒':'云南省','腾冲':'云南省','大理':'云南省','瑞丽':'云南省','景洪':'云南省','香格里拉':'云南省',
+    // 西藏
+    '拉萨':'西藏自治区','日喀则':'西藏自治区','昌都':'西藏自治区','林芝':'西藏自治区','山南':'西藏自治区','那曲':'西藏自治区','阿里':'西藏自治区',
+    // 陕西
+    '西安':'陕西省','铜川':'陕西省','宝鸡':'陕西省','咸阳':'陕西省','渭南':'陕西省','延安':'陕西省','汉中':'陕西省','榆林':'陕西省','安康':'陕西省','商洛':'陕西省','韩城':'陕西省','华阴':'陕西省','兴平':'陕西省','彬州':'陕西省','神木':'陕西省','子长':'陕西省',
+    // 甘肃
+    '兰州':'甘肃省','嘉峪关':'甘肃省','金昌':'甘肃省','白银':'甘肃省','天水':'甘肃省','武威':'甘肃省','张掖':'甘肃省','平凉':'甘肃省','酒泉':'甘肃省','庆阳':'甘肃省','定西':'甘肃省','陇南':'甘肃省','临夏':'甘肃省','甘南':'甘肃省','敦煌':'甘肃省','玉门':'甘肃省',
+    // 青海
+    '西宁':'青海省','海东':'青海省','海西':'青海省','海南':'青海省','海北':'青海省','黄南':'青海省','果洛':'青海省','玉树':'青海省','格尔木':'青海省','德令哈':'青海省','茫崖':'青海省',
+    // 宁夏
+    '银川':'宁夏回族自治区','石嘴山':'宁夏回族自治区','吴忠':'宁夏回族自治区','固原':'宁夏回族自治区','中卫':'宁夏回族自治区','灵武':'宁夏回族自治区','青铜峡':'宁夏回族自治区',
+    // 新疆
+    '乌鲁木齐':'新疆维吾尔自治区','克拉玛依':'新疆维吾尔自治区','吐鲁番':'新疆维吾尔自治区','哈密':'新疆维吾尔自治区','阿克苏':'新疆维吾尔自治区','喀什':'新疆维吾尔自治区','和田':'新疆维吾尔自治区','昌吉':'新疆维吾尔自治区','博尔塔拉':'新疆维吾尔自治区','巴音郭楞':'新疆维吾尔自治区','克孜勒苏':'新疆维吾尔自治区','伊犁':'新疆维吾尔自治区','塔城':'新疆维吾尔自治区','阿勒泰':'新疆维吾尔自治区','石河子':'新疆维吾尔自治区','库尔勒':'新疆维吾尔自治区','伊宁':'新疆维吾尔自治区','奎屯':'新疆维吾尔自治区','乌苏':'新疆维吾尔自治区','博乐':'新疆维吾尔自治区','阿拉山口':'新疆维吾尔自治区','阜康':'新疆维吾尔自治区',
+    // 香港澳门台湾
+    '香港':'香港特别行政区','澳门':'澳门特别行政区','台北':'台湾省','高雄':'台湾省','台中':'台湾省','台南':'台湾省','基隆':'台湾省','新竹':'台湾省','嘉义':'台湾省'
+  };
+
+  // 查找城市映射
+  for (const [city, prov] of Object.entries(cityMap)) {
+    if (name.includes(city)) return prov;
+  }
+
+  // 如果都不匹配，尝试模糊：包含"市""县""区""镇"且名称>=2字符
+  if (name.length >= 2 && (name.includes('市') || name.includes('县') || name.includes('区') || name.includes('镇'))) {
+    const clean = name.replace(/市|县|区|镇|乡|村|自治县|自治州|地区/g, '');
+    if (clean.length >= 2) {
+      for (const [city, prov] of Object.entries(cityMap)) {
+        if (clean.includes(city) || city.includes(clean)) return prov;
+      }
+    }
+  }
+
+  return null;
+}
+
+async function showChinaMap(mapId, chartId, labelCol, valueCol) {
+  const mapDiv = document.getElementById(mapId);
+  const container = document.getElementById(chartId + '-container');
+  const canvas = document.getElementById(chartId);
+  if (!mapDiv || !container) return;
+
+  if (chinaMapInstance) chinaMapInstance.dispose();
+  mapDiv.style.display = 'block';
+  if (canvas) canvas.style.display = 'none';
+  container.style.display = 'none';
+
+  try {
+    if (!chinaMapGeoLoaded) {
+      const resp = await fetch('https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json');
+      echarts.registerMap('china', await resp.json());
+      chinaMapGeoLoaded = true;
+    }
+
+    chinaMapInstance = echarts.init(mapDiv);
+    const biData = window['_bi_map_' + chartId] || window['_bi_data_' + chartId];
+    const allData = biData?.data || [];
+
+    // 聚合到省份标准名称
+    const nameMap = {};
+    let unmatched = 0;
+    allData.forEach(r => {
+      const name = String(r[labelCol] || '').trim();
+      const val = Number(r[valueCol]) || 0;
+      const prov = extractProvince(name);
+      if (prov) {
+        nameMap[prov] = (nameMap[prov] || 0) + val;
+      } else {
+        unmatched++;
+      }
+    });
+
+    if (Object.keys(nameMap).length === 0) {
+      mapDiv.innerHTML = `<div style="color:var(--warning);text-align:center;padding:40px;">⚠️ 数据无法匹配到中国地图省份<br><small>请确认数据包含省级名称（如"浙江省""江苏省"）</small><br><small>未匹配: ${unmatched}条</small></div>`;
+      return;
+    }
+
+    const mapData = Object.entries(nameMap).map(([name, value]) => ({ name, value }));
+    const maxVal = Math.max(...mapData.map(d => d.value), 1);
+
+    chinaMapInstance.setOption({
+      tooltip: { trigger: 'item', formatter: '{b}: {c}' },
+      visualMap: {
+        min: 0, max: maxVal,
+        left: 'left', bottom: '10%',
+        text: ['高', '低'], calculable: true,
+        inRange: { color: ['#e0f2fe', '#bae6fd', '#7dd3fc', '#38bdf8', '#0ea5e9', '#0284c7', '#0369a1'] }
+      },
+      series: [{
+        type: 'map', map: 'china',
+        roam: true, zoom: 1.2,
+        label: { show: false },
+        emphasis: { label: { show: true, fontSize: 10 } },
+        data: mapData
+      }]
+    });
+    console.log('[Map] 渲染完成，省份数:', Object.keys(nameMap).length, '未匹配:', unmatched);
+    window.addEventListener('resize', () => chinaMapInstance?.resize());
+  } catch (e) {
+    mapDiv.innerHTML = `<div style="color:var(--danger);text-align:center;padding:40px;">地图加载失败: ${e.message}</div>`;
+  }
 }
 
 // ==================== 初始化 ====================

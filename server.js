@@ -61,7 +61,7 @@ const upload = multer({
 
 /**
  * POST /api/chat
- * 获取数据上下文（浏览器端直接调用 Anthropic API，绕过服务器网络限制）
+ * 服务端调用 DeepSeek API，浏览器无需代理
  */
 app.post('/api/chat', async (req, res) => {
   try {
@@ -79,23 +79,73 @@ app.post('/api/chat', async (req, res) => {
       });
     }
 
-    // 构建数据上下文（不含 AI 调用，由浏览器端处理）
+    // 构建系统提示词 + 用户消息
     const preview = store.getPreview(5, 0);
     const schema = store.getSchema();
+    const systemPrompt = buildCleaningSystemPrompt(preview, schema);
+
+    // 调用 DeepSeek API（中国直连）
+    const aiMessages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: message }
+    ];
+    if (image) {
+      aiMessages[1].content = message + '\n\n[附加图片 base64: ' + image.substring(0, 100) + '...]';
+    }
+
+    const aiResponse = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (process.env.DEEPSEEK_API_KEY || 'sk-018dd51a952349bc942668a2977baf66')
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        max_tokens: 4096,
+        messages: aiMessages
+      })
+    });
+
+    if (!aiResponse.ok) {
+      const errData = await aiResponse.json().catch(() => ({}));
+      throw new Error('AI API 错误: ' + (errData.error?.message || aiResponse.status));
+    }
+
+    const aiData = await aiResponse.json();
+    const aiText = aiData.choices?.[0]?.message?.content || '';
+
+    // 解析JSON
+    let jsonStr = aiText;
+    const m = aiText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+    if (m) jsonStr = m[1].trim();
+
+    let plan;
+    try {
+      plan = JSON.parse(jsonStr);
+    } catch {
+      // 非JSON回复，当做普通对话
+      res.json({
+        explanation: aiText,
+        operations: [],
+        askConfirm: false,
+        confidence: 'low'
+      });
+      return;
+    }
 
     res.json({
-      dataContext: {
-        fields: preview.fields,
-        sampleRows: preview.rows,
-        totalRows: preview.totalRows,
-        fieldStats: schema
-      },
-      systemPrompt: buildCleaningSystemPrompt(preview, schema),
-      noData: false
+      explanation: plan.explanation || aiText,
+      operations: plan.operations || [],
+      askConfirm: plan.askConfirm !== false,
+      confidence: plan.confidence || 'medium',
+      imageAnalysis: plan.imageAnalysis || null
     });
   } catch (err) {
-    console.error('Chat context error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Chat error:', err);
+    res.status(500).json({
+      error: err.message,
+      explanation: 'AI服务调用失败: ' + err.message
+    });
   }
 });
 
@@ -147,16 +197,16 @@ ${sampleRows}
 
 /**
  * POST /api/execute
- * 执行清洗操作
+ * 执行清洗操作（MySQL数据源会自动同步到数据库）
  */
-app.post('/api/execute', (req, res) => {
+app.post('/api/execute', async (req, res) => {
   try {
     const { operations } = req.body;
     if (!operations || !Array.isArray(operations) || operations.length === 0) {
       return res.status(400).json({ error: '没有可执行的清洗操作' });
     }
 
-    // 记录操作（用于后续同步到数据库）
+    // 记录操作
     lastOperations = operations;
     syncPreviewInfo = {
       sourceType: store.sourceInfo?.type,
@@ -165,11 +215,28 @@ app.post('/api/execute', (req, res) => {
       rowsBefore: store.totalRows
     };
 
+    // 1. 先在内存中执行
     const result = executeCleaning(operations);
-    if (result.success) {
-      result._canSync = (store.sourceInfo?.type === 'mysql');
-      result._syncInfo = syncPreviewInfo;
+
+    if (!result.success) {
+      return res.json(result);
     }
+
+    // 2. MySQL数据源：自动同步到数据库
+    let syncResult = null;
+    if (store.sourceInfo?.type === 'mysql') {
+      try {
+        syncResult = await syncToMySQL(store.sourceInfo, operations);
+        result.syncResult = syncResult;
+        result.summary += ' | 数据库: ' + (syncResult.success ? '已同步' : '同步失败');
+      } catch (syncErr) {
+        result.syncResult = { success: false, message: syncErr.message };
+        result.summary += ' | 数据库: 同步失败 - ' + syncErr.message;
+      }
+    }
+
+    result._canSync = false; // 已自动同步，不需要手动同步
+    result._syncInfo = syncPreviewInfo;
     res.json(result);
   } catch (err) {
     console.error('Execute error:', err);
@@ -316,13 +383,13 @@ app.post('/api/load-mysql-table', async (req, res) => {
 
     const data = await getTableData(config, table);
 
-    // 保存真实密码用于后续同步（仅存在服务端内存）
+    // 保存真实密码用于后续同步，传入数据库真实总行数
     store.load(data.rows, data.fields, {
       type: 'mysql',
       name: `${config.host}/${config.database}`,
       table: table,
-      config: { ...config }  // 保留真实密码
-    });
+      config: { ...config }
+    }, data.totalRows);  // 数据库真实总行数
 
     res.json({
       success: true,
@@ -337,12 +404,44 @@ app.post('/api/load-mysql-table', async (req, res) => {
 
 /**
  * GET /api/data/preview
- * 预览当前数据
+ * 预览当前数据（从内存）
  */
 app.get('/api/data/preview', (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
   const offset = parseInt(req.query.offset) || 0;
   res.json(store.getPreview(limit, offset));
+});
+
+/**
+ * POST /api/reload-preview
+ * 从数据库重新加载更多数据（优先使用请求中的config，否则用服务器存储的真实密码）
+ */
+app.post('/api/reload-preview', async (req, res) => {
+  try {
+    const { table, limit } = req.body;
+    // 从前端获取config，失败时使用服务器端存储的sourceInfo.config（真实密码）
+    let config = req.body.config;
+    if (!config || !config.password || config.password === '******') {
+      config = store.sourceInfo?.config;
+    }
+    const tableName = table || store.sourceInfo?.table;
+
+    if (!config || !tableName) {
+      return res.status(400).json({ error: '请先连接数据库并加载表' });
+    }
+
+    const data = await getTableData(config, tableName, parseInt(limit) || 5000);
+
+    store.load(data.rows, data.fields, {
+      ...store.sourceInfo,
+      table: tableName
+    }, data.totalRows);
+
+    res.json({ fields: data.fields, rows: data.rows });
+  } catch (err) {
+    console.error('Reload preview error:', err);
+    res.status(500).json({ error: '重新加载失败: ' + err.message });
+  }
 });
 
 /**
@@ -475,6 +574,120 @@ app.post('/api/recycle-bin/clear', (req, res) => {
   });
 });
 
+// ==================== 数据分析 API ====================
+
+app.post('/api/analyze', async (req, res) => {
+  try {
+    const { question, type } = req.body;
+    if (!store.hasData()) {
+      return res.json({ error: '请先加载数据' });
+    }
+
+    const preview = store.getPreview(5, 0);
+    const schema = store.getSchema();
+    const fields = preview.fields;
+    const sourceInfo = store.sourceInfo;
+    const totalRows = store.totalRows;
+
+    // 构造提示词
+    const systemPrompt = `你是数据分析助手。根据用户问题生成分析结果。
+
+数据库: ${sourceInfo?.config?.database || ''}
+表名: ${sourceInfo?.table || ''}
+总行数: ${totalRows}
+字段: ${fields.join(', ')}
+字段详情: ${JSON.stringify(schema)}
+
+用户问题: ${question || '通用分析'}
+
+请返回JSON（不要其他内容）:
+{
+  "explanation": "分析说明（中文）",
+  "sql": "MySQL SELECT查询（表名用 ${sourceInfo?.table || 'table'}）",
+  "columns": ["列名1","列名2"],
+  "type": "table",
+  "chartType": "bar|pie|line|scatter|radar|funnel|treemap|wordcloud|map"
+}
+chartType根据用户意图选择：柱状图=bar 扇形图=pie 折线图=line 散点图=scatter 雷达图=radar 漏斗图=funnel 矩形树图=treemap 词云=wordcloud 地图=map。重要：如果用户提到"地区""省份""城市""地域""分布图""地图展示""按区域"，必须选map。`;
+
+    // 调用DeepSeek生成分析SQL
+    const aiResp = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + (process.env.DEEPSEEK_API_KEY || 'sk-018dd51a952349bc942668a2977baf66')
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat', max_tokens: 2048,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: question || type }
+        ]
+      })
+    });
+
+    const aiData = await aiResp.json();
+    const aiText = aiData.choices?.[0]?.message?.content || '';
+    let plan;
+    try {
+      let jsonStr = aiText;
+      const m = aiText.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+      if (m) jsonStr = m[1].trim();
+      plan = JSON.parse(jsonStr);
+    } catch { plan = { explanation: aiText, sql: null, columns: [], type: 'text' }; }
+
+    // 如果是MySQL数据源，执行AI生成的SQL
+    let queryResult = null;
+    if (plan.sql && sourceInfo?.type === 'mysql' && sourceInfo?.config) {
+      try {
+        const mysql = require('mysql2/promise');
+        const conn = await mysql.createConnection({
+          host: sourceInfo.config.host, port: sourceInfo.config.port || 3306,
+          user: sourceInfo.config.user, password: sourceInfo.config.password,
+          database: sourceInfo.config.database
+        });
+        // 用真实表名替换SQL中可能的错误表名
+        let execSql = plan.sql;
+        const realTable = sourceInfo.table;
+        execSql = execSql.replace(/FROM\s+`?\w+`?/i, `FROM \`${realTable}\``);
+        execSql = execSql.replace(/FROM\s+\w+\s+GROUP/i, `FROM \`${realTable}\` GROUP`);
+        console.log('[Analyze] 执行SQL:', execSql.substring(0, 200));
+        const [rows] = await conn.query(execSql + ' LIMIT 200');
+        await conn.end();
+        queryResult = rows.map(r => JSON.parse(JSON.stringify(r)));
+        if (!plan.columns || plan.columns.length === 0) {
+          plan.columns = queryResult.length > 0 ? Object.keys(queryResult[0]) : [];
+        }
+      } catch (sqlErr) {
+        console.error('[Analyze] SQL error:', sqlErr.message);
+        plan.sqlError = sqlErr.message;
+      }
+    } else if (plan.sql && sourceInfo?.type !== 'mysql') {
+      // Excel等非SQL数据源，用JS模拟简单聚合
+      queryResult = simpleAggregate(store.exportData().rows, plan);
+      if (!plan.columns || plan.columns.length === 0) {
+        plan.columns = queryResult.length > 0 ? Object.keys(queryResult[0]) : [];
+      }
+    }
+
+    res.json({ ...plan, queryResult, totalRows });
+  } catch (err) {
+    res.status(500).json({ error: '分析失败: ' + err.message });
+  }
+});
+
+// 简单内存聚合（用于Excel等非SQL数据源）
+function simpleAggregate(rows, plan) {
+  const { sql, columns } = plan;
+  if (!sql || !columns) return rows.slice(0, 100);
+  // 只返回前100行作为样本
+  return rows.slice(0, 100).map(r => {
+    const out = {};
+    columns.forEach(c => { out[c] = r[c]; });
+    return out;
+  });
+}
+
 // ==================== 数据库同步 API ====================
 
 /**
@@ -565,9 +778,19 @@ app.use((err, req, res, next) => {
 });
 
 // 启动服务器
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
+  // 写入 PID 文件，供 npm stop 使用
+  require('fs').writeFileSync(path.join(__dirname, '.server.pid'), String(process.pid));
   console.log(`\n🧹 AI数据清洗工具已启动`);
   console.log(`📍 访问地址: http://localhost:${PORT}`);
   console.log(`📁 上传目录: ${uploadDir}`);
   console.log(`🔑 API Key: ${process.env.ANTHROPIC_API_KEY ? '已配置 ✓' : '未配置 - 请编辑 .env 文件'}\n`);
+  console.log(`🛑 停止: npm stop\n`);
 });
+
+// 退出时清理 PID 文件
+process.on('exit', () => {
+  try { require('fs').unlinkSync(path.join(__dirname, '.server.pid')); } catch(e) {}
+});
+process.on('SIGINT', () => { server.close(); process.exit(); });
+process.on('SIGTERM', () => { server.close(); process.exit(); });
